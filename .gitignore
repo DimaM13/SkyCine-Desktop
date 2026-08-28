@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Production builds
+dist/
+release/
+
+# Logs
+*.log
+mpv_runtime.log
+
+# Binaries
+bin/*.exe
+bin/*.com
+bin/*.7z
+bin/mpv/
+bin/doc/
+bin/installer/
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
