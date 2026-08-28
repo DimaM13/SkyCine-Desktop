@@ -645,12 +645,6 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
       return;
     }
 
-    if (isDesktop) {
-      const dp = (window as any).desktopPlayer;
-      dp?.togglePlay();
-      return;
-    }
-
     const video = videoRef.current;
     if (!video) return;
 
@@ -692,11 +686,6 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const changeVolume = (val: number) => {
     setVolume(val);
     setIsMuted(val === 0);
-    if (isDesktop) {
-      const dp = (window as any).desktopPlayer;
-      dp?.setVolume(val * 100);
-      return;
-    }
     const video = videoRef.current;
     if (video) video.volume = val;
   };
@@ -704,11 +693,6 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const toggleMute = () => {
     const nextMute = !isMuted;
     setIsMuted(nextMute);
-    if (isDesktop) {
-      const dp = (window as any).desktopPlayer;
-      dp?.setMute(nextMute);
-      return;
-    }
     const video = videoRef.current;
     if (!video) return;
     if (!nextMute) {
@@ -719,12 +703,6 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   };
 
   const toggleFullscreen = () => {
-    if (isDesktop) {
-      const dp = (window as any).desktopPlayer;
-      dp?.toggleFullscreen?.();
-      setIsFullscreen(!isFullscreen);
-      return;
-    }
     if (!containerRef.current) return;
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
