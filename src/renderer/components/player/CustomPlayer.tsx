@@ -296,10 +296,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     if (isDesktop) {
       const dp = (window as any).desktopPlayer;
       const token = localStorage.getItem('myplex_token');
-      const serverOrigin = window.location.port === '3000'
-        ? `${window.location.protocol}//${window.location.hostname}:5000`
-        : window.location.origin;
-      const directUrl = `${serverOrigin}/api/stream/${media.id}/direct${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+      const directUrl = `${getServerUrl()}/api/stream/${media.id}/direct${token ? `?token=${encodeURIComponent(token)}` : ''}`;
       dp?.loadFile(directUrl, startPos, media.title);
       return;
     }

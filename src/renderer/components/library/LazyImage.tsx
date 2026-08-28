@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { getServerUrl } from '../../api/client';
 
 interface LazyImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   fallbackSrc?: string;
@@ -31,7 +32,12 @@ export const LazyImage: React.FC<LazyImageProps> = ({ src, fallbackSrc, classNam
     return () => observer.disconnect();
   }, []);
 
-  const finalSrc = hasError && fallbackSrc ? fallbackSrc : src;
+  let resolvedSrc = src;
+  if (resolvedSrc && resolvedSrc.startsWith('/') && !resolvedSrc.startsWith('//')) {
+    resolvedSrc = `${getServerUrl()}${resolvedSrc}`;
+  }
+
+  const finalSrc = hasError && fallbackSrc ? fallbackSrc : resolvedSrc;
 
   return (
     <img
@@ -51,4 +57,3 @@ export const LazyImage: React.FC<LazyImageProps> = ({ src, fallbackSrc, classNam
     />
   );
 };
-
