@@ -254,17 +254,25 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
 
   useEffect(() => {
+    setHasVideoFrame(false);
+  }, [media.id]);
+
+  useEffect(() => {
     if (!isDesktop) return;
     const dp = (window as any).desktopPlayer;
     if (!dp) return;
 
     const unsubs = [
+      dp.onVideoReady?.(() => {
+        setHasVideoFrame(true);
+      }),
       dp.onTimeUpdate((t: number) => {
-        if (t > 0) setHasVideoFrame(true);
+        if (t > 0.3) {
+          setHasVideoFrame(true);
+        }
         if (!isScrubbing) setCurrentTime(t);
       }),
       dp.onPlayState((playing: boolean) => {
-        if (playing) setHasVideoFrame(true);
         setIsPlaying(playing);
         setIsBuffering(false);
       }),
@@ -874,12 +882,15 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
         />
       )}
 
-      {/* Dark Cinema Placeholder before video renders on Desktop */}
+      {/* Dark Cinema Solid Background until Video Frame is Decoded */}
       {isDesktop && !hasVideoFrame && (
-        <div className="absolute inset-0 z-20 bg-cinema-950 flex flex-col items-center justify-center pointer-events-none transition-opacity duration-300">
-          <div className="w-14 h-14 border-4 border-cinema-gold/20 border-t-cinema-gold rounded-full animate-spin mb-4" />
-          <span className="text-sm font-medium text-slate-300 tracking-wider">
+        <div className="absolute inset-0 z-20 bg-[#07090e] flex flex-col items-center justify-center pointer-events-none select-none">
+          <div className="w-14 h-14 border-4 border-cinema-gold/20 border-t-cinema-gold rounded-full animate-spin mb-4 shadow-glow-gold" />
+          <span className="text-sm font-semibold text-slate-200 tracking-wider">
             Запуск аппаратного воспроизведения...
+          </span>
+          <span className="text-xs text-cinema-gold/80 mt-1 font-medium">
+            {media.title}
           </span>
         </div>
       )}

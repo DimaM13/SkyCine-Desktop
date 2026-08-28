@@ -76,6 +76,12 @@ async function createWindow() {
   });
 
   // Forward MPV events to React UI
+  mpv.on('video-ready', () => {
+    if (!mainWindow?.isDestroyed()) {
+      mainWindow?.webContents.send('mpv:video-ready');
+    }
+  });
+
   mpv.on('time-update', (time) => {
     if (!mainWindow?.isDestroyed()) {
       mainWindow?.webContents.send('mpv:time-update', time);

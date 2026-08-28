@@ -20,6 +20,7 @@ export interface DesktopPlayerApi {
   closeWindow: () => Promise<void>;
   isMaximized: () => Promise<boolean>;
   onMaximizedChange: (callback: (isMax: boolean) => void) => () => void;
+  onVideoReady: (callback: () => void) => () => void;
   onTimeUpdate: (callback: (time: number) => void) => () => void;
   onPlayState: (callback: (isPlaying: boolean) => void) => () => void;
   onDuration: (callback: (duration: number) => void) => () => void;
@@ -52,6 +53,12 @@ const desktopPlayer: DesktopPlayerApi = {
     const handler = (_: any, isMax: boolean) => callback(isMax);
     ipcRenderer.on('window:maximized-change', handler);
     return () => ipcRenderer.removeListener('window:maximized-change', handler);
+  },
+
+  onVideoReady: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('mpv:video-ready', handler);
+    return () => ipcRenderer.removeListener('mpv:video-ready', handler);
   },
 
   onTimeUpdate: (callback) => {

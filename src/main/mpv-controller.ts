@@ -194,6 +194,9 @@ export class MpvController extends EventEmitter {
       switch (msg.name) {
         case 'time-pos':
           if (typeof msg.data === 'number') {
+            if (msg.data > 0.1) {
+              this.emit('video-ready');
+            }
             this.emit('time-update', msg.data);
           }
           break;
@@ -223,6 +226,8 @@ export class MpvController extends EventEmitter {
           }
           break;
       }
+    } else if (msg.event === 'playback-restart') {
+      this.emit('video-ready');
     } else if (msg.event === 'end-file') {
       this.emit('ended');
     }
