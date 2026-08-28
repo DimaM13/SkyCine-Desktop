@@ -60,11 +60,7 @@ const MainLayout: React.FC = () => {
 
   useEffect(() => {
     document.body.style.backgroundColor = '#07090e';
-    if (isDesktop && !isPlayerScreen && prevIsPlayerScreen.current) {
-      (window as any).desktopPlayer?.closePlayer?.();
-    }
-    prevIsPlayerScreen.current = isPlayerScreen;
-  }, [isPlayerScreen, isDesktop]);
+  }, []);
 
   if (isPlayerScreen) {
     return (
