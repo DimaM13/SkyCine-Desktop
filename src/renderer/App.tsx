@@ -16,6 +16,8 @@ import { FriendsPage } from './pages/FriendsPage';
 import { AdminPage } from './pages/AdminPage';
 import { AuthPage } from './pages/AuthPage';
 import { Titlebar } from './components/layout/Titlebar';
+import { getServerUrl } from './api/client';
+import { ServerSettingsModal } from './components/auth/ServerSettingsModal';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isLoading } = useAuth();
@@ -112,6 +114,11 @@ const MainLayout: React.FC = () => {
           </Routes>
         </main>
       </div>
+
+      <ServerSettingsModal
+        isOpen={isDesktop && !getServerUrl()}
+        isInitialSetup={true}
+      />
     </div>
   );
 };

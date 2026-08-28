@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Users, Shield, LogOut, User as UserIcon,
-  Play, Menu, Radio
+  Play, Menu, Radio, Server
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { ServerSettingsModal } from '../auth/ServerSettingsModal';
 
 interface NavbarProps {
   onToggleSidebar?: () => void;
@@ -15,6 +16,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showServerModal, setShowServerModal] = useState(false);
+  const isDesktop = typeof window !== 'undefined' && Boolean((window as any).desktopPlayer?.isDesktop);
 
   const isPlayerScreen =
     location.pathname.startsWith('/watch') ||
@@ -97,23 +100,33 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar }) => {
           )}
 
           {/* User Profile / Auth Area */}
+          {isDesktop && (
+            <button
+              onClick={() => setShowServerModal(true)}
+              className="p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 hover:text-cinema-gold transition-colors flex items-center gap-1.5 text-xs font-semibold"
+              title="Настройки сервера"
+            >
+              <Server className="w-4 h-4 text-cinema-gold" />
+              <span className="hidden sm:inline">Сервер</span>
+            </button>
+          )}
+
           {user ? (
             <div className="relative">
               <button
                 onClick={() => setShowUserMenu(!showUserMenu)}
-                className="flex items-center gap-2.5 p-1.5 pr-3 rounded-2xl bg-white/5 border border-white/10 hover:border-white/20 transition-all"
+                className="flex items-center gap-3 p-1.5 pr-3 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
               >
-                <img
-                  src={user.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.username}`}
-                  alt={user.username}
-                  className="w-8 h-8 rounded-full bg-cinema-800 object-cover"
-                />
-                <div className="hidden sm:flex flex-col text-left">
-                  <span className="text-xs font-bold text-white">{user.username}</span>
-                  <span className="text-[10px] text-cinema-gold uppercase font-bold tracking-wider">
-                    {user.role}
-                  </span>
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cinema-gold to-yellow-300 flex items-center justify-center font-bold text-black text-xs shadow-md">
+                  {user.avatarUrl ? (
+                    <img src={user.avatarUrl} alt={user.username} className="w-full h-full object-cover rounded-xl" />
+                  ) : (
+                    user.username.charAt(0).toUpperCase()
+                  )}
                 </div>
+                <span className="text-xs font-bold text-white hidden sm:inline max-w-[120px] truncate">
+                  {user.username}
+                </span>
               </button>
 
               {/* User Dropdown Menu */}
@@ -161,6 +174,11 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar }) => {
           )}
         </div>
       </div>
+
+      <ServerSettingsModal
+        isOpen={showServerModal}
+        onClose={() => setShowServerModal(false)}
+      />
     </header>
   );
 };
