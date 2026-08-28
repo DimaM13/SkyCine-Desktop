@@ -11,10 +11,14 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    minWidth: 1024,
-    minHeight: 600,
-    backgroundColor: '#00000000',
-    transparent: true,
+    minWidth: 800,
+    minHeight: 500,
+    resizable: true,
+    movable: true,
+    minimizable: true,
+    maximizable: true,
+    fullscreenable: true,
+    backgroundColor: '#07090e',
     autoHideMenuBar: true,
     title: 'SkyCine Cinema Desktop',
     webPreferences: {
