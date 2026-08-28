@@ -38,7 +38,8 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
       setServerUrl(cleanUrl);
       setSuccess(true);
       setTimeout(() => {
-        window.location.reload();
+        onClose?.();
+        window.location.hash = '#/auth';
       }, 500);
     } catch (err: any) {
       // Even if 401 Unauthorized, server responded and is alive!
@@ -46,7 +47,8 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
         setServerUrl(cleanUrl);
         setSuccess(true);
         setTimeout(() => {
-          window.location.reload();
+          onClose?.();
+          window.location.hash = '#/auth';
         }, 500);
       } else {
         setError('Не удалось подключиться к серверу. Проверьте адрес, порт и включен ли сервер.');
