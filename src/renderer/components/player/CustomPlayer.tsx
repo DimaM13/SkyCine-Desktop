@@ -293,14 +293,6 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   }, [isDesktop, isScrubbing]);
 
   const loadStreamSource = useCallback((url: string, isDirect: boolean, shouldPlay: boolean = false, startPos: number = 0) => {
-    if (isDesktop) {
-      const dp = (window as any).desktopPlayer;
-      const token = localStorage.getItem('myplex_token');
-      const directUrl = `${getServerUrl()}/api/stream/${media.id}/direct${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-      dp?.loadFile(directUrl, startPos, media.title);
-      return;
-    }
-
     const video = videoRef.current;
     if (!video) return;
 
@@ -494,30 +486,23 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     const token = localStorage.getItem('myplex_token');
     const tokenParam = token ? `token=${encodeURIComponent(token)}` : '';
     const roomParam = isWatchTogether && room?.id ? `roomId=${room.id}` : '';
+    const serverUrl = getServerUrl();
 
     if (isDirectPlay) {
       const params = [tokenParam, roomParam].filter(Boolean).join('&');
-      return `/api/stream/${media.id}/direct${params ? `?${params}` : ''}`;
+      return `${serverUrl}/api/stream/${media.id}/direct${params ? `?${params}` : ''}`;
     }
 
     const isAppleParam = isAppleDevice ? '1' : '0';
     const startParam = startPos > 0 ? `startTime=${Math.floor(startPos)}` : '';
     const params = [`quality=${quality}`, `audioIndex=${audioIndex}`, `isApple=${isAppleParam}`, startParam, tokenParam, roomParam].filter(Boolean).join('&');
-    return `/api/stream/${media.id}/master.m3u8?${params}`;
+    return `${serverUrl}/api/stream/${media.id}/master.m3u8?${params}`;
   }, [media.id, isDirectPlay, isAppleDevice, isWatchTogether, room?.id]);
 
   const doSeek = useCallback((targetTime: number, forcePlayState?: boolean) => {
     const safePos = Math.max(0, Math.min(effectiveDuration, targetTime));
     setCurrentTime(safePos);
     setScrubTime(safePos);
-
-    if (isDesktop) {
-      const dp = (window as any).desktopPlayer;
-      dp?.seek(safePos);
-      const shouldPlay = forcePlayState !== undefined ? forcePlayState : isPlaying;
-      if (shouldPlay) dp?.play();
-      return;
-    }
 
     const video = videoRef.current;
     if (!video) return;
@@ -535,7 +520,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
       video.pause();
       setIsPlaying(false);
     }
-  }, [effectiveDuration, isDesktop, isPlaying, videoRef]);
+  }, [effectiveDuration, isPlaying, videoRef]);
 
   useEffect(() => {
     onAttachSeekHandler?.(doSeek);
@@ -841,56 +826,36 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     <div
       ref={containerRef}
       onMouseMove={handleMouseMove}
-      className={`relative w-full h-full ${isDesktop && hasVideoFrame ? 'bg-transparent' : 'bg-[#07090e]'} flex items-center justify-center select-none overflow-hidden group font-sans touch-none`}
+      className="relative w-full h-full bg-[#07090e] flex items-center justify-center select-none overflow-hidden group font-sans touch-none"
     >
-      {!isDesktop ? (
-        <video
-          ref={videoRef}
-          onTimeUpdate={handleTimeUpdate}
-          onWaiting={handleWaiting}
-          onCanPlay={handleCanPlay}
-          onCanPlayThrough={() => setIsBuffering(false)}
-          onSeeked={() => {
-            setIsBuffering(false);
-            if (videoRef.current) setIsPlaying(!videoRef.current.paused);
-          }}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
-          onClick={togglePlay}
-          className="w-full h-full object-contain cursor-pointer focus:outline-none"
-          playsInline
-          preload="auto"
-        >
-          {selectedSubtitleTrack >= 0 && (
-            <track
-              kind="subtitles"
-              src={`/api/stream/${media.id}/subtitle/${selectedSubtitleTrack}?format=vtt${localStorage.getItem('myplex_token') ? `&token=${encodeURIComponent(localStorage.getItem('myplex_token')!)}` : ''}`}
-              srcLang="ru"
-              label="Субтитры"
-              default
-            />
-          )}
-        </video>
-      ) : (
-        <div
-          onClick={togglePlay}
-          className="w-full h-full cursor-pointer focus:outline-none bg-transparent"
-        />
-      )}
-
-      {/* Dark Cinema Solid Background until Video Frame is Decoded */}
-      {isDesktop && !hasVideoFrame && (
-        <div className="absolute inset-0 z-20 bg-[#07090e] flex flex-col items-center justify-center select-none">
-          <div className="w-14 h-14 border-4 border-cinema-gold/20 border-t-cinema-gold rounded-full animate-spin mb-4 shadow-glow-gold" />
-          <span className="text-sm font-semibold text-slate-200 tracking-wider">
-            Запуск аппаратного воспроизведения...
-          </span>
-          <span className="text-xs text-cinema-gold/80 mt-1 font-medium">
-            {media.title}
-          </span>
-        </div>
-      )}
+      <video
+        ref={videoRef}
+        onTimeUpdate={handleTimeUpdate}
+        onWaiting={handleWaiting}
+        onCanPlay={handleCanPlay}
+        onCanPlayThrough={() => setIsBuffering(false)}
+        onSeeked={() => {
+          setIsBuffering(false);
+          if (videoRef.current) setIsPlaying(!videoRef.current.paused);
+        }}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => setIsPlaying(false)}
+        onClick={togglePlay}
+        className="w-full h-full object-contain cursor-pointer focus:outline-none"
+        playsInline
+        preload="auto"
+      >
+        {selectedSubtitleTrack >= 0 && (
+          <track
+            kind="subtitles"
+            src={`${getServerUrl()}/api/stream/${media.id}/subtitle/${selectedSubtitleTrack}?format=vtt${localStorage.getItem('myplex_token') ? `&token=${encodeURIComponent(localStorage.getItem('myplex_token')!)}` : ''}`}
+            srcLang="ru"
+            label="Субтитры"
+            default
+          />
+        )}
+      </video>
 
       {/* Floating Reaction Overlay */}
       {reactions.length > 0 && <ReactionOverlay reactions={reactions} />}

@@ -58,25 +58,18 @@ const MainLayout: React.FC = () => {
     location.pathname.startsWith('/watch') ||
     (/^\/rooms\/[a-zA-Z0-9_-]+$/.test(location.pathname) && location.pathname !== '/rooms');
 
-  const prevIsPlayerScreen = useRef(isPlayerScreen);
   useEffect(() => {
-    if (isDesktop) {
-      if (isPlayerScreen) {
-        document.body.style.backgroundColor = 'transparent';
-      } else {
-        document.body.style.backgroundColor = '#07090e';
-        if (prevIsPlayerScreen.current) {
-          (window as any).desktopPlayer?.closePlayer();
-        }
-      }
-      prevIsPlayerScreen.current = isPlayerScreen;
+    document.body.style.backgroundColor = '#07090e';
+    if (isDesktop && !isPlayerScreen && prevIsPlayerScreen.current) {
+      (window as any).desktopPlayer?.closePlayer?.();
     }
+    prevIsPlayerScreen.current = isPlayerScreen;
   }, [isPlayerScreen, isDesktop]);
 
   if (isPlayerScreen) {
     return (
-      <div className={`fixed inset-0 w-full h-full ${isDesktop ? 'bg-transparent' : 'bg-black'} overflow-hidden select-none touch-none z-50 flex flex-col`}>
-        <main className={`w-full h-full flex-1 relative overflow-hidden ${isDesktop ? 'bg-transparent' : 'bg-black'}`}>
+      <div className="fixed inset-0 w-full h-full bg-[#07090e] overflow-hidden select-none touch-none z-50 flex flex-col">
+        <main className="w-full h-full flex-1 relative overflow-hidden bg-[#07090e]">
           <Routes>
             <Route path="/rooms/:code" element={<ProtectedRoute><RoomPage /></ProtectedRoute>} />
             <Route path="/watch/:id" element={<ProtectedRoute><DirectPlayerPage /></ProtectedRoute>} />
