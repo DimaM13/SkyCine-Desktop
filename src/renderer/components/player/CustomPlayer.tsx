@@ -219,24 +219,23 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     const chText = channelsNum === 6 ? '5.1' : channelsNum === 8 ? '7.1' : channelsNum === 2 ? '2.0' : channelsNum ? `${channelsNum}.0` : '';
     const audioLabel = `${aLang}${aCodec ? ` • ${aCodec}` : ''}${chText ? ` ${chText}` : ''}`;
 
-    const isDesktopApp = typeof window !== 'undefined' && Boolean((window as any).desktopPlayer?.isDesktop);
+    const containerLabel = isDirectPlay
+      ? 'Direct MP4'
+      : useFmp4
+        ? (isAppleDevice ? 'fMP4 CMAF (Apple HLS)' : 'fMP4 CMAF (Chunked MP4)')
+        : 'MPEG-TS (Apple HLS)';
 
-    const containerLabel = isDesktopApp
-      ? 'Native MKV / Direct Stream'
-      : isDirectPlay
-        ? 'Direct MP4'
-        : useFmp4
-          ? (isAppleDevice ? 'fMP4 CMAF (Apple HLS)' : 'fMP4 CMAF (Chunked MP4)')
-          : 'MPEG-TS (Apple HLS)';
-    const engineLabel = isDesktopApp
-      ? 'MPV Native Engine (Direct3D11 / GPU NVDEC)'
-      : isDirectPlay ? 'HTML5 Native Player' : isAppleDevice ? 'Apple Native AVPlayer' : 'Hls.js Engine (MSE)';
+    const engineLabel = isDirectPlay
+      ? 'HTML5 Hardware Accelerated Engine'
+      : isAppleDevice
+        ? 'Apple Native AVPlayer Engine'
+        : 'Hls.js Hardware Engine (MSE / GPU)';
 
     return {
-      modeText: isDesktopApp ? 'Прямой нативный поток (Bit-perfect MPV Direct Play)' : modeText,
-      modeType: isDesktopApp ? 'direct' : modeType,
-      isVideoDirectCopy: isDesktopApp ? true : isVideoDirectCopy,
-      isAudioTrans: isDesktopApp ? false : isAudioTrans,
+      modeText,
+      modeType,
+      isVideoDirectCopy,
+      isAudioTrans,
       vCodec,
       res,
       videoLabel,
@@ -253,7 +252,55 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const isDesktop = typeof window !== 'undefined' && Boolean((window as any).desktopPlayer?.isDesktop);
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
 
+  useEffect(() => {
+    setHasVideoFrame(false);
+  }, [media.id]);
+
+  useEffect(() => {
+    if (!isDesktop) return;
+    const dp = (window as any).desktopPlayer;
+    if (!dp) return;
+
+    const unsubs = [
+      dp.onVideoReady?.(() => {
+        setHasVideoFrame(true);
+        setIsBuffering(false);
+      }),
+      dp.onTimeUpdate((t: number) => {
+        if (t > 0.1) setHasVideoFrame(true);
+        if (!isScrubbing) setCurrentTime(t);
+      }),
+      dp.onPlayState((playing: boolean) => {
+        setIsPlaying(playing);
+        setIsBuffering(false);
+      }),
+      dp.onDuration((d: number) => {
+        if (d > 0) setDuration(d);
+      }),
+      dp.onBuffering((buf: boolean) => {
+        setIsBuffering(buf);
+      }),
+      dp.onEnded(() => {
+        setIsPlaying(false);
+      })
+    ];
+
+    return () => {
+      unsubs.forEach((u: any) => u?.());
+    };
+  }, [isDesktop, isScrubbing]);
+
   const loadStreamSource = useCallback((url: string, isDirect: boolean, shouldPlay: boolean = false, startPos: number = 0) => {
+    if (isDesktop) {
+      const dp = (window as any).desktopPlayer;
+      const token = localStorage.getItem('myplex_token');
+      const directUrl = `${getServerUrl()}/api/stream/${media.id}/direct${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+      console.log('[CustomPlayer] 🎬 Starting MPV Direct Play:', directUrl);
+      setIsBuffering(true);
+      dp?.loadFile(directUrl, startPos, media.title);
+      return;
+    }
+
     const video = videoRef.current;
     if (!video) return;
 
@@ -469,6 +516,14 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     setCurrentTime(safePos);
     setScrubTime(safePos);
 
+    if (isDesktop) {
+      const dp = (window as any).desktopPlayer;
+      dp?.seek(safePos);
+      const shouldPlay = forcePlayState !== undefined ? forcePlayState : isPlaying;
+      if (shouldPlay) dp?.play();
+      return;
+    }
+
     const video = videoRef.current;
     if (!video) return;
 
@@ -485,7 +540,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
       video.pause();
       setIsPlaying(false);
     }
-  }, [effectiveDuration, isPlaying, videoRef]);
+  }, [effectiveDuration, isDesktop, isPlaying, videoRef]);
 
   useEffect(() => {
     onAttachSeekHandler?.(doSeek);
@@ -503,18 +558,20 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
 
   // Initial load
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    if (!isDesktop && !videoRef.current) return;
+    if (isDesktop && hasLoadedDesktopRef.current === media.id) return;
 
     const startPos = Math.max(0, initialPosition || 0);
     const shouldStartPlay = isWatchTogether ? (roomState === 'PLAYING') : true;
 
     setCurrentTime(startPos);
     setBufferedTime(startPos);
+    isInitialMount.current = false;
+    hasLoadedDesktopRef.current = media.id;
 
     const url = buildStreamUrl(selectedQuality, selectedAudioTrack, startPos);
     loadStreamSource(url, isDirectPlay, shouldStartPlay, startPos);
-  }, [media.id, selectedQuality, selectedAudioTrack, isDirectPlay, buildStreamUrl, loadStreamSource]);
+  }, [media.id, isDesktop, selectedQuality, selectedAudioTrack, isDirectPlay, buildStreamUrl, loadStreamSource]);
 
   // Sync playback when roomState changes in Watch Together
   useEffect(() => {
@@ -645,6 +702,12 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
       return;
     }
 
+    if (isDesktop) {
+      const dp = (window as any).desktopPlayer;
+      dp?.togglePlay();
+      return;
+    }
+
     const video = videoRef.current;
     if (!video) return;
 
@@ -686,6 +749,11 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const changeVolume = (val: number) => {
     setVolume(val);
     setIsMuted(val === 0);
+    if (isDesktop) {
+      const dp = (window as any).desktopPlayer;
+      dp?.setVolume(val * 100);
+      return;
+    }
     const video = videoRef.current;
     if (video) video.volume = val;
   };
@@ -693,6 +761,11 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const toggleMute = () => {
     const nextMute = !isMuted;
     setIsMuted(nextMute);
+    if (isDesktop) {
+      const dp = (window as any).desktopPlayer;
+      dp?.setMute(nextMute);
+      return;
+    }
     const video = videoRef.current;
     if (!video) return;
     if (!nextMute) {
@@ -703,6 +776,12 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   };
 
   const toggleFullscreen = () => {
+    if (isDesktop) {
+      const dp = (window as any).desktopPlayer;
+      dp?.toggleFullscreen?.();
+      setIsFullscreen(!isFullscreen);
+      return;
+    }
     if (!containerRef.current) return;
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
@@ -755,36 +834,43 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     <div
       ref={containerRef}
       onMouseMove={handleMouseMove}
-      className="relative w-full h-full bg-[#07090e] flex items-center justify-center select-none overflow-hidden group font-sans touch-none"
+      className={`relative w-full h-full ${isDesktop ? 'bg-transparent' : 'bg-[#07090e]'} flex items-center justify-center select-none overflow-hidden group font-sans touch-none`}
     >
-      <video
-        ref={videoRef}
-        onTimeUpdate={handleTimeUpdate}
-        onWaiting={handleWaiting}
-        onCanPlay={handleCanPlay}
-        onCanPlayThrough={() => setIsBuffering(false)}
-        onSeeked={() => {
-          setIsBuffering(false);
-          if (videoRef.current) setIsPlaying(!videoRef.current.paused);
-        }}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={() => setIsPlaying(false)}
-        onClick={togglePlay}
-        className="w-full h-full object-contain cursor-pointer focus:outline-none"
-        playsInline
-        preload="auto"
-      >
-        {selectedSubtitleTrack >= 0 && (
-          <track
-            kind="subtitles"
-            src={`${getServerUrl()}/api/stream/${media.id}/subtitle/${selectedSubtitleTrack}?format=vtt${localStorage.getItem('myplex_token') ? `&token=${encodeURIComponent(localStorage.getItem('myplex_token')!)}` : ''}`}
-            srcLang="ru"
-            label="Субтитры"
-            default
-          />
-        )}
-      </video>
+      {!isDesktop ? (
+        <video
+          ref={videoRef}
+          onTimeUpdate={handleTimeUpdate}
+          onWaiting={handleWaiting}
+          onCanPlay={handleCanPlay}
+          onCanPlayThrough={() => setIsBuffering(false)}
+          onSeeked={() => {
+            setIsBuffering(false);
+            if (videoRef.current) setIsPlaying(!videoRef.current.paused);
+          }}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
+          onClick={togglePlay}
+          className="w-full h-full object-contain cursor-pointer focus:outline-none"
+          playsInline
+          preload="auto"
+        >
+          {selectedSubtitleTrack >= 0 && (
+            <track
+              kind="subtitles"
+              src={`${getServerUrl()}/api/stream/${media.id}/subtitle/${selectedSubtitleTrack}?format=vtt${localStorage.getItem('myplex_token') ? `&token=${encodeURIComponent(localStorage.getItem('myplex_token')!)}` : ''}`}
+              srcLang="ru"
+              label="Субтитры"
+              default
+            />
+          )}
+        </video>
+      ) : (
+        <div
+          onClick={togglePlay}
+          className="w-full h-full cursor-pointer focus:outline-none bg-transparent"
+        />
+      )}
 
       {/* Floating Reaction Overlay */}
       {reactions.length > 0 && <ReactionOverlay reactions={reactions} />}
