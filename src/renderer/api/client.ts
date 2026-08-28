@@ -2,29 +2,17 @@ import axios from 'axios';
 
 export function getServerUrl(): string {
   if (typeof window === 'undefined') return '';
-  let custom = localStorage.getItem('skycine_server_url');
-  if (custom) {
-    custom = custom.trim().replace(/\/+$/, '');
-    if (custom.endsWith(':3000')) {
-      custom = custom.replace(/:3000$/, ':5000');
-    }
-    return custom;
-  }
+  const custom = localStorage.getItem('skycine_server_url');
+  if (custom) return custom.trim().replace(/\/+$/, '');
   
   if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
-    if (window.location.port === '3000') {
-      return `${window.location.protocol}//${window.location.hostname}:5000`;
-    }
     return window.location.origin;
   }
   return '';
 }
 
 export function setServerUrl(url: string): void {
-  let cleanUrl = url.trim().replace(/\/+$/, '');
-  if (cleanUrl.endsWith(':3000')) {
-    cleanUrl = cleanUrl.replace(/:3000$/, ':5000');
-  }
+  const cleanUrl = url.trim().replace(/\/+$/, '');
   localStorage.setItem('skycine_server_url', cleanUrl);
 }
 
