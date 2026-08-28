@@ -774,6 +774,12 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   };
 
   const toggleFullscreen = () => {
+    if (isDesktop) {
+      const dp = (window as any).desktopPlayer;
+      dp?.toggleFullscreen?.();
+      setIsFullscreen(!isFullscreen);
+      return;
+    }
     if (!containerRef.current) return;
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});

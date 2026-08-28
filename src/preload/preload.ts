@@ -14,6 +14,7 @@ export interface DesktopPlayerApi {
   setSpeed: (speed: number) => Promise<void>;
   showOsdText: (text: string, durationMs?: number) => Promise<void>;
   closePlayer: () => Promise<void>;
+  toggleFullscreen: () => Promise<void>;
   onTimeUpdate: (callback: (time: number) => void) => () => void;
   onPlayState: (callback: (isPlaying: boolean) => void) => () => void;
   onDuration: (callback: (duration: number) => void) => () => void;
@@ -32,10 +33,11 @@ const desktopPlayer: DesktopPlayerApi = {
   setVolume: (vol) => ipcRenderer.invoke('mpv:setVolume', vol),
   setMute: (muted) => ipcRenderer.invoke('mpv:setMute', muted),
   setAudioTrack: (id) => ipcRenderer.invoke('mpv:setAudioTrack', id),
-  setSubtitleTrack: (id) => ipcRenderer.invoke('mpv:setSubtitleTrack', id),
+  setSubtitleTrack(id) { return ipcRenderer.invoke('mpv:setSubtitleTrack', id); },
   setSpeed: (speed) => ipcRenderer.invoke('mpv:setSpeed', speed),
   showOsdText: (text, durationMs = 2000) => ipcRenderer.invoke('mpv:showOsd', text, durationMs),
   closePlayer: () => ipcRenderer.invoke('mpv:close'),
+  toggleFullscreen: () => ipcRenderer.invoke('window:toggleFullscreen'),
 
   onTimeUpdate: (callback) => {
     const handler = (_: any, time: number) => callback(time);

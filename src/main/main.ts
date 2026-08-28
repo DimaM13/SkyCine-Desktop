@@ -13,12 +13,13 @@ async function createWindow() {
     height: 900,
     minWidth: 800,
     minHeight: 500,
+    transparent: true,
+    backgroundColor: '#00000000',
     resizable: true,
     movable: true,
     minimizable: true,
     maximizable: true,
     fullscreenable: true,
-    backgroundColor: '#07090e',
     autoHideMenuBar: true,
     title: 'SkyCine Cinema Desktop',
     webPreferences: {
@@ -116,6 +117,12 @@ async function createWindow() {
 
   ipcMain.handle('mpv:close', async () => {
     mpv?.destroy();
+  });
+
+  ipcMain.handle('window:toggleFullscreen', async () => {
+    if (mainWindow) {
+      mainWindow.setFullScreen(!mainWindow.isFullScreen());
+    }
   });
 
   const prodPath = path.join(__dirname, '..', 'renderer', 'index.html');
