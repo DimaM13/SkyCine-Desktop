@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { MediaItem, MediaTrack, RoomState } from '../../types';
 import { ReactionOverlay } from './ReactionOverlay';
-import { apiClient } from '../../api/client';
+import { apiClient, getServerUrl } from '../../api/client';
 
 interface CustomPlayerProps {
   media: MediaItem;
