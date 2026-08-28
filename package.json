@@ -1,6 +1,6 @@
 {
   "name": "skycine-desktop",
-  "version": "1.0.0",
+  "version": "6.0.0",
   "description": "SkyCine Cinema Desktop with Native Direct3D MPV Engine",
   "main": "dist/main/main.js",
   "author": "SkyCine Team",
