@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 export function getServerUrl(): string {
-  if (typeof window === 'undefined') return 'http://109.104.188.66:5000';
+  if (typeof window === 'undefined') return '';
   const custom = localStorage.getItem('skycine_server_url');
   if (custom) return custom.replace(/\/+$/, '');
   
@@ -11,7 +11,7 @@ export function getServerUrl(): string {
     }
     return window.location.origin;
   }
-  return 'http://109.104.188.66:5000';
+  return '';
 }
 
 export function setServerUrl(url: string): void {

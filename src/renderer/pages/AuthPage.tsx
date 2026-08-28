@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Film, Play, Lock, User, Mail, Sparkles, AlertCircle } from 'lucide-react';
+import { Film, Play, Lock, User, Mail, Sparkles, AlertCircle, Server } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { getServerUrl } from '../api/client';
+import { ServerSettingsModal } from '../components/auth/ServerSettingsModal';
 
 export const AuthPage: React.FC = () => {
   const { login, register, user } = useAuth();
   const navigate = useNavigate();
 
+  const isDesktop = typeof window !== 'undefined' && Boolean((window as any).desktopPlayer?.isDesktop);
+  const [showServerModal, setShowServerModal] = useState(isDesktop && !getServerUrl());
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -155,8 +159,25 @@ export const AuthPage: React.FC = () => {
           >
             {loading ? 'Обработка...' : mode === 'login' ? 'Войти в кинозал' : 'Создать аккаунт'}
           </button>
+
+          {isDesktop && (
+            <button
+              type="button"
+              onClick={() => setShowServerModal(true)}
+              className="w-full py-2 text-[11px] text-slate-400 hover:text-cinema-gold flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <Server className="w-3.5 h-3.5" />
+              <span>Сервер: <code className="text-white/80">{getServerUrl() || 'Не указан'}</code> (изменить)</span>
+            </button>
+          )}
         </form>
       </div>
+
+      <ServerSettingsModal
+        isOpen={showServerModal}
+        onClose={() => setShowServerModal(false)}
+        isInitialSetup={isDesktop && !getServerUrl()}
+      />
     </div>
   );
 };
