@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
  Film, Tv, Video, Radio, Clock, Play, Users, Star, Layers, Sparkles, Clapperboard
 } from 'lucide-react';
-import { apiClient } from '../api/client';
+import { apiClient, resolveMediaUrl } from '../api/client';
 import { HeroBanner } from '../components/library/HeroBanner';
 import { MediaCard } from '../components/library/MediaCard';
 import { MediaModal } from '../components/library/MediaModal';
@@ -143,7 +143,9 @@ export const HomePage: React.FC = () => {
  ? Math.round((item.progressSeconds / item.durationSeconds) * 100)
  : 0;
 
- const thumbUrl = item.stillPath || (item.type === 'EPISODE' ? `/api/media/item/${item.mediaId}/thumbnail` : (item.backdropPath || item.posterPath));
+ const rawThumb = item.stillPath || (item.type === 'EPISODE' ? `/api/media/item/${item.mediaId}/thumbnail` : (item.backdropPath || item.posterPath));
+ const thumbUrl = resolveMediaUrl(rawThumb);
+ const fallbackThumb = resolveMediaUrl(`/api/media/item/${item.mediaId}/thumbnail`);
 
  return (
  <div
@@ -159,7 +161,7 @@ export const HomePage: React.FC = () => {
  onError={(e) => {
  const target = e.currentTarget as HTMLImageElement;
  if (!target.src.includes('/thumbnail')) {
- target.src = `/api/media/item/${item.mediaId}/thumbnail`;
+ target.src = fallbackThumb;
  } else {
  target.onerror = null;
  target.style.opacity = '0.3';
@@ -347,8 +349,10 @@ export const HomePage: React.FC = () => {
 
  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
  {items.slice(0, 4).map((vid: MediaItem) => {
- const thumbUrl = vid.stillPath || vid.posterPath || `/api/media/item/${vid.id}/thumbnail`;
- return (
+  const rawThumb = vid.stillPath || vid.posterPath || `/api/media/item/${vid.id}/thumbnail`;
+  const thumbUrl = resolveMediaUrl(rawThumb);
+  const fallbackThumb = resolveMediaUrl(`/api/media/item/${vid.id}/thumbnail`);
+  return (
  <div
  key={vid.id}
  onClick={() => handleOpenDetails(vid)}
@@ -359,9 +363,7 @@ export const HomePage: React.FC = () => {
  src={thumbUrl}
  alt={vid.title}
  loading="lazy"
- onError={(e) => {
- (e.currentTarget as HTMLImageElement).src = `/api/media/item/${vid.id}/thumbnail`;
- }}
+ fallbackSrc={fallbackThumb}
  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
  />
  <div className="absolute top-2.5 right-2.5">

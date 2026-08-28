@@ -19,6 +19,16 @@ export function setServerUrl(url: string): void {
   localStorage.setItem('skycine_server_url', cleanUrl);
 }
 
+export function resolveMediaUrl(path?: string | null): string {
+  if (!path) return '';
+  if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:') || path.startsWith('blob:')) {
+    return path;
+  }
+  const base = getServerUrl();
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return base ? `${base}${cleanPath}` : cleanPath;
+}
+
 export const API_BASE_URL = `${getServerUrl()}/api`;
 
 export const apiClient = axios.create({

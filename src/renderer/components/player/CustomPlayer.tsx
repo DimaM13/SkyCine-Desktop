@@ -841,7 +841,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     <div
       ref={containerRef}
       onMouseMove={handleMouseMove}
-      className={`relative w-full h-full ${isDesktop ? 'bg-transparent' : 'bg-black'} flex items-center justify-center select-none overflow-hidden group font-sans touch-none`}
+      className={`relative w-full h-full ${isDesktop && hasVideoFrame ? 'bg-transparent' : 'bg-[#07090e]'} flex items-center justify-center select-none overflow-hidden group font-sans touch-none`}
     >
       {!isDesktop ? (
         <video
@@ -881,7 +881,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
 
       {/* Dark Cinema Solid Background until Video Frame is Decoded */}
       {isDesktop && !hasVideoFrame && (
-        <div className="absolute inset-0 z-20 bg-[#07090e] flex flex-col items-center justify-center pointer-events-none select-none">
+        <div className="absolute inset-0 z-20 bg-[#07090e] flex flex-col items-center justify-center select-none">
           <div className="w-14 h-14 border-4 border-cinema-gold/20 border-t-cinema-gold rounded-full animate-spin mb-4 shadow-glow-gold" />
           <span className="text-sm font-semibold text-slate-200 tracking-wider">
             Запуск аппаратного воспроизведения...

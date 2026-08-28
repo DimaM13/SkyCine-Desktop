@@ -1,8 +1,32 @@
 import { spawn, ChildProcess } from 'child_process';
 import net from 'net';
 import path from 'path';
+import fs from 'fs';
 import { EventEmitter } from 'events';
 import { app } from 'electron';
+
+function findMpvPath(): string {
+  const possiblePaths = [
+    path.join(process.resourcesPath, 'bin', 'mpv.exe'),
+    path.join(process.resourcesPath, 'app.asar.unpacked', 'bin', 'mpv.exe'),
+    path.join(app.getAppPath(), '..', 'bin', 'mpv.exe'),
+    path.join(app.getAppPath(), 'bin', 'mpv.exe'),
+    path.join(__dirname, '..', '..', 'bin', 'mpv.exe'),
+    path.join(__dirname, '..', 'bin', 'mpv.exe'),
+    path.join(process.cwd(), 'bin', 'mpv.exe')
+  ];
+
+  for (const p of possiblePaths) {
+    try {
+      if (fs.existsSync(p)) {
+        console.log('[MPV Controller] 🎯 Found mpv binary at:', p);
+        return p;
+      }
+    } catch {}
+  }
+  console.warn('[MPV Controller] ⚠️ MPV binary not found, fallback to default path');
+  return path.join(process.resourcesPath, 'bin', 'mpv.exe');
+}
 
 export class MpvController extends EventEmitter {
   private proc: ChildProcess | null = null;
@@ -54,9 +78,7 @@ export class MpvController extends EventEmitter {
     this.destroy();
 
     this.pipePath = `\\\\.\\pipe\\skycine_mpv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const mpvBinPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'bin', 'mpv.exe')
-      : path.join(__dirname, '..', '..', 'bin', 'mpv.exe');
+    const mpvBinPath = findMpvPath();
     const logFilePath = app.isPackaged
       ? path.join(app.getPath('userData'), 'mpv.log')
       : path.join(__dirname, '..', '..', 'mpv_runtime.log');

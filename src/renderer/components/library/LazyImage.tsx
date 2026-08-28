@@ -37,7 +37,12 @@ export const LazyImage: React.FC<LazyImageProps> = ({ src, fallbackSrc, classNam
     resolvedSrc = `${getServerUrl()}${resolvedSrc}`;
   }
 
-  const finalSrc = hasError && fallbackSrc ? fallbackSrc : resolvedSrc;
+  let resolvedFallback = fallbackSrc;
+  if (resolvedFallback && resolvedFallback.startsWith('/') && !resolvedFallback.startsWith('//')) {
+    resolvedFallback = `${getServerUrl()}${resolvedFallback}`;
+  }
+
+  const finalSrc = hasError && resolvedFallback ? resolvedFallback : resolvedSrc;
 
   return (
     <img
@@ -46,7 +51,7 @@ export const LazyImage: React.FC<LazyImageProps> = ({ src, fallbackSrc, classNam
       alt={alt}
       className={className}
       onError={(e) => {
-        if (!hasError && fallbackSrc) {
+        if (!hasError && resolvedFallback) {
           setHasError(true);
         }
         if (props.onError) {

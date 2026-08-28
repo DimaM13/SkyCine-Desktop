@@ -36,19 +36,13 @@ export const MediaCard: React.FC<MediaCardProps> = ({
  >
  {/* Poster Image Container */}
  <div className="relative aspect-[2/3] w-full overflow-hidden bg-cinema-950">
- {media.posterPath ? (
  <LazyImage
- src={media.posterPath}
+ src={media.posterPath || media.stillPath || `/api/media/item/${media.id}/thumbnail`}
  alt={media.title}
  loading="lazy"
+ fallbackSrc={media.posterPath ? `/api/media/item/${media.id}/thumbnail` : undefined}
  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
  />
- ) : (
- <div className="w-full h-full flex flex-col items-center justify-center p-4 text-slate-500 bg-gradient-to-br from-cinema-900 to-cinema-950">
- <Film className="w-10 h-10 text-cinema-gold/30 mb-2" />
- <span className="text-xs text-center line-clamp-2 text-slate-300 font-semibold">{media.title}</span>
- </div>
- )}
 
  {/* Top Badges (Rating, Quality) */}
  <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none z-10">
