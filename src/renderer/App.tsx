@@ -74,7 +74,6 @@ const MainLayout: React.FC = () => {
   if (isPlayerScreen) {
     return (
       <div className={`fixed inset-0 w-full h-full ${isDesktop ? 'bg-transparent' : 'bg-black'} overflow-hidden select-none touch-none z-50 flex flex-col`}>
-        <Titlebar isPlayer={true} />
         <main className={`w-full h-full flex-1 relative overflow-hidden ${isDesktop ? 'bg-transparent' : 'bg-black'}`}>
           <Routes>
             <Route path="/rooms/:code" element={<ProtectedRoute><RoomPage /></ProtectedRoute>} />

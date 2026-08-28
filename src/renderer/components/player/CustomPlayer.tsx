@@ -4,7 +4,8 @@ import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize,
   RotateCcw, RotateCw, Settings, MessageSquare,
   Users, Radio, Disc3, Subtitles, Volume1,
-  ArrowLeft, Share2, Activity, Cpu, Film, Music
+  ArrowLeft, Share2, Activity, Cpu, Film, Music,
+  Minus, Square, X
 } from 'lucide-react';
 import { MediaItem, MediaTrack, RoomState } from '../../types';
 import { ReactionOverlay } from './ReactionOverlay';
@@ -895,11 +896,12 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
 
       {/* Top Header Controls */}
       <div
-        className={`absolute top-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-b from-black/90 via-black/50 to-transparent transition-opacity duration-300 z-30 flex items-center justify-between ${
+        className={`absolute top-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-b from-black/90 via-black/50 to-transparent transition-opacity duration-300 z-30 flex items-center justify-between select-none ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
+        style={{ WebkitAppRegion: 'drag' } as any}
       >
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-3 min-w-0" style={{ WebkitAppRegion: 'no-drag' } as any}>
           {onBack && (
             <button
               onClick={() => {
@@ -953,7 +955,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
         </div>
 
         {/* Top Right Actions */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as any}>
           {isWatchTogether && onInvite && (
             <button
               onClick={onInvite}
@@ -984,6 +986,32 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
           >
             <Activity className="w-4 h-4" />
           </button>
+
+          {isDesktop && (
+            <div className="flex items-center gap-1 ml-2 pl-2 border-l border-white/15">
+              <button
+                onClick={() => (window as any).desktopPlayer?.minimizeWindow?.()}
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 transition-colors cursor-pointer"
+                title="Свернуть"
+              >
+                <Minus className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => (window as any).desktopPlayer?.maximizeWindow?.()}
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 transition-colors cursor-pointer"
+                title="Развернуть"
+              >
+                <Square className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => (window as any).desktopPlayer?.closeWindow?.()}
+                className="p-2 rounded-xl bg-red-500/20 hover:bg-red-600 text-red-300 hover:text-white transition-colors cursor-pointer"
+                title="Закрыть"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
