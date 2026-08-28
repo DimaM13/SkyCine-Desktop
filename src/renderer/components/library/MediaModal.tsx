@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X, Play, Users, Star, Clock, Disc3, Subtitles, Film, HardDrive, Sparkles, Search, Check, Trash2, Edit3, Lock, RotateCcw } from 'lucide-react';
-import { apiClient } from '../../api/client';
+import { apiClient, resolveMediaUrl } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { MediaItem } from '../../types';
 import { MediaAccessModal } from '../admin/MediaAccessModal';
@@ -144,10 +144,13 @@ export const MediaModal: React.FC<MediaModalProps> = ({
           <div className="overflow-y-auto">
             {/* Header Backdrop Banner */}
             <div className="relative h-64 md:h-80 w-full overflow-hidden bg-cinema-950">
-              {media.backdropPath || media.posterPath ? (
+              {media.backdropPath || media.posterPath || media.stillPath ? (
                 <img
-                  src={media.backdropPath || media.posterPath}
+                  src={resolveMediaUrl(media.backdropPath || media.posterPath || media.stillPath || `/api/media/item/${media.id}/thumbnail`)}
                   alt={media.title}
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = resolveMediaUrl(`/api/media/item/${media.id}/thumbnail`);
+                  }}
                   className="w-full h-full object-cover object-top filter brightness-85"
                 />
               ) : (

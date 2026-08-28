@@ -5,7 +5,7 @@ import {
   Volume2, Subtitles, Layers, Sparkles
 } from 'lucide-react';
 import { MediaItem } from '../../types';
-import { apiClient } from '../../api/client';
+import { apiClient, resolveMediaUrl } from '../../api/client';
 
 interface EpisodeModalProps {
   episode: MediaItem | null;
@@ -74,7 +74,9 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
     }
   };
 
-  const episodePoster = episode.stillPath || `/api/media/item/${episode.id}/thumbnail`;
+  const rawPoster = episode.stillPath || `/api/media/item/${episode.id}/thumbnail`;
+  const episodePoster = resolveMediaUrl(rawPoster);
+  const fallbackPoster = resolveMediaUrl(`/api/media/item/${episode.id}/thumbnail`);
 
   return (
     <div

@@ -253,48 +253,11 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const isDesktop = typeof window !== 'undefined' && Boolean((window as any).desktopPlayer?.isDesktop);
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
 
-  useEffect(() => {
-    setHasVideoFrame(false);
-  }, [media.id]);
-
-  useEffect(() => {
-    if (!isDesktop) return;
-    const dp = (window as any).desktopPlayer;
-    if (!dp) return;
-
-    const unsubs = [
-      dp.onVideoReady?.(() => {
-        setHasVideoFrame(true);
-      }),
-      dp.onTimeUpdate((t: number) => {
-        if (t > 0.3) {
-          setHasVideoFrame(true);
-        }
-        if (!isScrubbing) setCurrentTime(t);
-      }),
-      dp.onPlayState((playing: boolean) => {
-        setIsPlaying(playing);
-        setIsBuffering(false);
-      }),
-      dp.onDuration((d: number) => {
-        if (d > 0) setDuration(d);
-      }),
-      dp.onBuffering((buf: boolean) => {
-        setIsBuffering(buf);
-      }),
-      dp.onEnded(() => {
-        setIsPlaying(false);
-      })
-    ];
-
-    return () => {
-      unsubs.forEach((u: any) => u?.());
-    };
-  }, [isDesktop, isScrubbing]);
-
   const loadStreamSource = useCallback((url: string, isDirect: boolean, shouldPlay: boolean = false, startPos: number = 0) => {
     const video = videoRef.current;
     if (!video) return;
+
+    setIsBuffering(true);
 
     if (isDirect) {
       if (hlsRef.current) {
@@ -323,6 +286,8 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
           setIsPlaying(false);
           setIsBuffering(false);
         });
+      } else {
+        setIsBuffering(false);
       }
     } else {
       if (isAppleDevice && video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -538,36 +503,22 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
 
   // Initial load
   useEffect(() => {
-    if (!isDesktop && !videoRef.current) return;
-    if (isDesktop && hasLoadedDesktopRef.current === media.id) return;
+    const video = videoRef.current;
+    if (!video) return;
 
     const startPos = Math.max(0, initialPosition || 0);
     const shouldStartPlay = isWatchTogether ? (roomState === 'PLAYING') : true;
 
     setCurrentTime(startPos);
     setBufferedTime(startPos);
-    isInitialMount.current = false;
-    hasLoadedDesktopRef.current = media.id;
 
     const url = buildStreamUrl(selectedQuality, selectedAudioTrack, startPos);
     loadStreamSource(url, isDirectPlay, shouldStartPlay, startPos);
-  }, [media.id, isDesktop]);
+  }, [media.id, selectedQuality, selectedAudioTrack, isDirectPlay, buildStreamUrl, loadStreamSource]);
 
   // Sync playback when roomState changes in Watch Together
   useEffect(() => {
     if (!isWatchTogether) return;
-
-    if (isDesktop) {
-      const dp = (window as any).desktopPlayer;
-      if (roomState === 'PLAYING') {
-        dp?.play();
-        setIsPlaying(true);
-      } else if (roomState === 'PAUSED') {
-        dp?.pause();
-        setIsPlaying(false);
-      }
-      return;
-    }
 
     const video = videoRef.current;
     if (!video) return;
@@ -585,7 +536,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
         setIsPlaying(false);
       }
     }
-  }, [roomState, isWatchTogether, isDesktop, videoRef]);
+  }, [roomState, isWatchTogether, videoRef]);
 
   // Quality or audio track switch
   const prevQualityRef = useRef(selectedQuality);

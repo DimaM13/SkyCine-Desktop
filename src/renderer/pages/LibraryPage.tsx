@@ -5,7 +5,7 @@ import {
   Sparkles, Clapperboard, Layers, Star, Play, Lock, ArrowLeft, Clock, Calendar, X, Check,
   CheckCircle2, ChevronRight, Plus
 } from 'lucide-react';
-import { apiClient } from '../api/client';
+import { apiClient, resolveMediaUrl } from '../api/client';
 import { MediaCard } from '../components/library/MediaCard';
 import { MediaModal } from '../components/library/MediaModal';
 import { EpisodeModal } from '../components/library/EpisodeModal';
@@ -564,7 +564,8 @@ export const LibraryPage: React.FC = () => {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {movies.slice(0, visibleCount).map((vid) => {
-                const thumbUrl = vid.stillPath || vid.posterPath || `/api/media/item/${vid.id}/thumbnail`;
+                const rawThumb = vid.stillPath || vid.posterPath || `/api/media/item/${vid.id}/thumbnail`;
+                const thumbUrl = resolveMediaUrl(rawThumb);
                 const userProgress = (vid as any).userProgress || 0;
                 const duration = vid.durationSeconds || 0;
                 const hasProgress = userProgress > 15 && duration > 0;
@@ -680,7 +681,7 @@ export const LibraryPage: React.FC = () => {
               {/* Show Hero */}
               <div className="relative rounded-3xl overflow-hidden bg-cinema-900 border border-white/10 shadow-2xl">
                 {selectedShow.backdropPath && (
-                  <div className="absolute inset-0 z-0 opacity-20 bg-cover bg-center pointer-events-none" style={{ backgroundImage: `url(${selectedShow.backdropPath})` }}>
+                  <div className="absolute inset-0 z-0 opacity-20 bg-cover bg-center pointer-events-none" style={{ backgroundImage: `url(${resolveMediaUrl(selectedShow.backdropPath)})` }}>
                     <div className="absolute inset-0 bg-gradient-to-t from-cinema-950 via-cinema-950/80 to-transparent" />
                   </div>
                 )}
@@ -688,7 +689,7 @@ export const LibraryPage: React.FC = () => {
                 <div className="relative z-10 p-6 md:p-8 flex flex-col md:flex-row gap-6 md:gap-8 items-start">
                   {selectedShow.posterPath ? (
                     <img
-                      src={selectedShow.posterPath}
+                      src={resolveMediaUrl(selectedShow.posterPath)}
                       alt={selectedShow.showTitle}
                       loading="lazy"
                       className="w-36 md:w-52 aspect-[2/3] rounded-2xl object-cover shadow-2xl shrink-0 border border-white/10"
@@ -860,7 +861,8 @@ export const LibraryPage: React.FC = () => {
                         const progressPercent = (ep as any).userProgress && ep.durationSeconds
                           ? Math.min(100, Math.round(((ep as any).userProgress / ep.durationSeconds) * 100))
                           : 0;
-                        const posterUrl = ep.stillPath || `/api/media/item/${ep.id}/thumbnail`;
+                        const rawPoster = ep.stillPath || `/api/media/item/${ep.id}/thumbnail`;
+                        const posterUrl = resolveMediaUrl(rawPoster);
 
                         return (
                           <div
