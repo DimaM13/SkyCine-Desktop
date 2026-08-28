@@ -13,6 +13,7 @@ async function createWindow() {
     height: 900,
     minWidth: 800,
     minHeight: 500,
+    frame: false,
     transparent: true,
     backgroundColor: '#00000000',
     resizable: true,
@@ -20,7 +21,6 @@ async function createWindow() {
     minimizable: true,
     maximizable: true,
     fullscreenable: true,
-    autoHideMenuBar: true,
     title: 'SkyCine Cinema Desktop',
     webPreferences: {
       preload: preloadPath,
@@ -34,6 +34,45 @@ async function createWindow() {
 
   mainWindow.on('minimize', () => {
     mpv?.pause();
+  });
+
+  mainWindow.on('maximize', () => {
+    if (!mainWindow?.isDestroyed()) {
+      mainWindow?.webContents.send('window:maximized-change', true);
+    }
+  });
+
+  mainWindow.on('unmaximize', () => {
+    if (!mainWindow?.isDestroyed()) {
+      mainWindow?.webContents.send('window:maximized-change', false);
+    }
+  });
+
+  // Window Controls IPC Handlers
+  ipcMain.handle('window:minimize', () => {
+    mainWindow?.minimize();
+  });
+
+  ipcMain.handle('window:maximize', () => {
+    if (mainWindow?.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow?.maximize();
+    }
+  });
+
+  ipcMain.handle('window:close', () => {
+    mainWindow?.close();
+  });
+
+  ipcMain.handle('window:isMaximized', () => {
+    return mainWindow?.isMaximized() || false;
+  });
+
+  ipcMain.handle('window:toggleFullscreen', async () => {
+    if (mainWindow) {
+      mainWindow.setFullScreen(!mainWindow.isFullScreen());
+    }
   });
 
   // Forward MPV events to React UI
@@ -73,7 +112,7 @@ async function createWindow() {
     }
   });
 
-  // Setup IPC Handlers
+  // Setup MPV IPC Handlers
   ipcMain.handle('mpv:loadFile', async (_, url, startPos, title) => {
     const parentHwnd = mainWindow?.getNativeWindowHandle().readBigInt64LE(0);
     await mpv?.startPlayer(url, startPos, title, parentHwnd);
@@ -117,12 +156,6 @@ async function createWindow() {
 
   ipcMain.handle('mpv:close', async () => {
     mpv?.destroy();
-  });
-
-  ipcMain.handle('window:toggleFullscreen', async () => {
-    if (mainWindow) {
-      mainWindow.setFullScreen(!mainWindow.isFullScreen());
-    }
   });
 
   const prodPath = path.join(__dirname, '..', 'renderer', 'index.html');

@@ -15,6 +15,7 @@ import { DirectPlayerPage } from './pages/DirectPlayerPage';
 import { FriendsPage } from './pages/FriendsPage';
 import { AdminPage } from './pages/AdminPage';
 import { AuthPage } from './pages/AuthPage';
+import { Titlebar } from './components/layout/Titlebar';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isLoading } = useAuth();
@@ -73,6 +74,7 @@ const MainLayout: React.FC = () => {
   if (isPlayerScreen) {
     return (
       <div className={`fixed inset-0 w-full h-full ${isDesktop ? 'bg-transparent' : 'bg-black'} overflow-hidden select-none touch-none z-50 flex flex-col`}>
+        <Titlebar isPlayer={true} />
         <main className={`w-full h-full flex-1 relative overflow-hidden ${isDesktop ? 'bg-transparent' : 'bg-black'}`}>
           <Routes>
             <Route path="/rooms/:code" element={<ProtectedRoute><RoomPage /></ProtectedRoute>} />
@@ -85,6 +87,7 @@ const MainLayout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-cinema-950 text-slate-100 flex flex-col">
+      <Titlebar />
       <Navbar onToggleSidebar={() => setMobileSidebarOpen(!mobileSidebarOpen)} />
       <InviteToast />
 

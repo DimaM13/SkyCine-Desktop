@@ -15,6 +15,11 @@ export interface DesktopPlayerApi {
   showOsdText: (text: string, durationMs?: number) => Promise<void>;
   closePlayer: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
+  minimizeWindow: () => Promise<void>;
+  maximizeWindow: () => Promise<void>;
+  closeWindow: () => Promise<void>;
+  isMaximized: () => Promise<boolean>;
+  onMaximizedChange: (callback: (isMax: boolean) => void) => () => void;
   onTimeUpdate: (callback: (time: number) => void) => () => void;
   onPlayState: (callback: (isPlaying: boolean) => void) => () => void;
   onDuration: (callback: (duration: number) => void) => () => void;
@@ -38,6 +43,16 @@ const desktopPlayer: DesktopPlayerApi = {
   showOsdText: (text, durationMs = 2000) => ipcRenderer.invoke('mpv:showOsd', text, durationMs),
   closePlayer: () => ipcRenderer.invoke('mpv:close'),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggleFullscreen'),
+  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+  maximizeWindow: () => ipcRenderer.invoke('window:maximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+  isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+
+  onMaximizedChange: (callback) => {
+    const handler = (_: any, isMax: boolean) => callback(isMax);
+    ipcRenderer.on('window:maximized-change', handler);
+    return () => ipcRenderer.removeListener('window:maximized-change', handler);
+  },
 
   onTimeUpdate: (callback) => {
     const handler = (_: any, time: number) => callback(time);

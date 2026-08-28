@@ -250,6 +250,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
 
   const hlsRef = useRef<Hls | null>(null);
   const isDesktop = typeof window !== 'undefined' && Boolean((window as any).desktopPlayer?.isDesktop);
+  const [hasVideoFrame, setHasVideoFrame] = useState(false);
 
   useEffect(() => {
     if (!isDesktop) return;
@@ -258,9 +259,11 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
 
     const unsubs = [
       dp.onTimeUpdate((t: number) => {
+        if (t > 0) setHasVideoFrame(true);
         if (!isScrubbing) setCurrentTime(t);
       }),
       dp.onPlayState((playing: boolean) => {
+        if (playing) setHasVideoFrame(true);
         setIsPlaying(playing);
         setIsBuffering(false);
       }),
@@ -868,6 +871,16 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
           onClick={togglePlay}
           className="w-full h-full cursor-pointer focus:outline-none bg-transparent"
         />
+      )}
+
+      {/* Dark Cinema Placeholder before video renders on Desktop */}
+      {isDesktop && !hasVideoFrame && (
+        <div className="absolute inset-0 z-20 bg-cinema-950 flex flex-col items-center justify-center pointer-events-none transition-opacity duration-300">
+          <div className="w-14 h-14 border-4 border-cinema-gold/20 border-t-cinema-gold rounded-full animate-spin mb-4" />
+          <span className="text-sm font-medium text-slate-300 tracking-wider">
+            Запуск аппаратного воспроизведения...
+          </span>
+        </div>
       )}
 
       {/* Floating Reaction Overlay */}
