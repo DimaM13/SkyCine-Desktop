@@ -271,15 +271,20 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const hlsRef = useRef<Hls | null>(null);
   const isDesktop = typeof window !== 'undefined' && Boolean((window as any).desktopPlayer?.isDesktop);
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
+  const videoFrameTicksRef = useRef<number>(0);
 
   useEffect(() => {
     setHasVideoFrame(false);
+    videoFrameTicksRef.current = 0;
   }, [media.id]);
 
   useEffect(() => {
     if (!isDesktop) return;
     if (hasVideoFrame) {
-      document.body.style.backgroundColor = 'transparent';
+      const timer = setTimeout(() => {
+        document.body.style.backgroundColor = 'transparent';
+      }, 150);
+      return () => clearTimeout(timer);
     } else {
       document.body.style.backgroundColor = '#07090e';
     }
@@ -300,16 +305,23 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
 
     const unsubs = [
       dp.onVideoReady?.(() => {
-        setHasVideoFrame(true);
         setIsBuffering(false);
       }),
       dp.onTimeUpdate((t: number) => {
-        if (t > 0.05) setHasVideoFrame(true);
         if (!isScrubbing) setCurrentTime(t);
+        if (t > 0.1) {
+          videoFrameTicksRef.current += 1;
+          if (videoFrameTicksRef.current >= 2) {
+            setHasVideoFrame(true);
+            setIsBuffering(false);
+          }
+        }
       }),
       dp.onPlayState((playing: boolean) => {
         setIsPlaying(playing);
-        setIsBuffering(false);
+        if (playing && videoFrameTicksRef.current >= 2) {
+          setIsBuffering(false);
+        }
       }),
       dp.onDuration((d: number) => {
         if (d > 0) setDuration(d);
@@ -918,8 +930,12 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
       )}
 
       {/* Dark Cinema Solid Background until First Video Frame is Decoded */}
-      {isDesktop && !hasVideoFrame && (
-        <div className="absolute inset-0 z-10 bg-[#07090e] flex flex-col items-center justify-center select-none pointer-events-none">
+      {isDesktop && (
+        <div
+          className={`absolute inset-0 z-10 bg-[#07090e] flex flex-col items-center justify-center select-none transition-opacity duration-500 pointer-events-none ${
+            hasVideoFrame ? 'opacity-0' : 'opacity-100'
+          }`}
+        >
           <div className="w-14 h-14 border-4 border-cinema-gold/20 border-t-cinema-gold rounded-full animate-spin mb-4 shadow-glow-gold" />
           <span className="text-sm font-semibold text-slate-200 tracking-wider">
             Запуск прямого воспроизведения MPV...
@@ -933,8 +949,8 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
       {/* Floating Reaction Overlay */}
       {reactions.length > 0 && <ReactionOverlay reactions={reactions} />}
 
-      {/* Buffering Spinner */}
-      {isBuffering && (
+      {/* Buffering Spinner (only during playback when video frame is already active) */}
+      {isBuffering && (!isDesktop || hasVideoFrame) && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
           <div className="w-14 h-14 border-4 border-cinema-gold/20 border-t-cinema-gold rounded-full animate-spin"></div>
         </div>
