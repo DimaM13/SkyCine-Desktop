@@ -231,6 +231,26 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
         ? 'Apple Native AVPlayer Engine'
         : 'Hls.js Hardware Engine (MSE / GPU)';
 
+    const isDesktopApp = typeof window !== 'undefined' && Boolean((window as any).desktopPlayer?.isDesktop);
+
+    if (isDesktopApp) {
+      return {
+        modeText: 'Прямой нативный поток (MPV Direct Play)',
+        modeType: 'direct' as const,
+        isVideoDirectCopy: true,
+        isAudioTrans: false,
+        vCodec,
+        res,
+        videoLabel: [vCodec, res].filter(Boolean).join(' • ') || 'Оригинал',
+        aLang,
+        aCodec,
+        chText,
+        audioLabel,
+        containerLabel: 'Нативный медиаконтейнер (MKV / MP4)',
+        engineLabel: 'MPV Native Direct3D 11 Engine (GPU Hardware Decoded)',
+      };
+    }
+
     return {
       modeText,
       modeType,
@@ -258,6 +278,23 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
 
   useEffect(() => {
     if (!isDesktop) return;
+    if (hasVideoFrame) {
+      document.body.style.backgroundColor = 'transparent';
+    } else {
+      document.body.style.backgroundColor = '#07090e';
+    }
+  }, [hasVideoFrame, isDesktop]);
+
+  useEffect(() => {
+    return () => {
+      if (isDesktop) {
+        document.body.style.backgroundColor = '#07090e';
+      }
+    };
+  }, [isDesktop]);
+
+  useEffect(() => {
+    if (!isDesktop) return;
     const dp = (window as any).desktopPlayer;
     if (!dp) return;
 
@@ -267,7 +304,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
         setIsBuffering(false);
       }),
       dp.onTimeUpdate((t: number) => {
-        if (t > 0.1) setHasVideoFrame(true);
+        if (t > 0.05) setHasVideoFrame(true);
         if (!isScrubbing) setCurrentTime(t);
       }),
       dp.onPlayState((playing: boolean) => {
@@ -696,8 +733,16 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     if (isWatchTogether) {
       if (isPlaying) {
         onPauseRequest?.();
+        if (isDesktop) {
+          (window as any).desktopPlayer?.pause();
+          setIsPlaying(false);
+        }
       } else {
         onPlayRequest?.();
+        if (isDesktop) {
+          (window as any).desktopPlayer?.play();
+          setIsPlaying(true);
+        }
       }
       return;
     }
@@ -834,7 +879,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     <div
       ref={containerRef}
       onMouseMove={handleMouseMove}
-      className={`relative w-full h-full ${isDesktop ? 'bg-transparent' : 'bg-[#07090e]'} flex items-center justify-center select-none overflow-hidden group font-sans touch-none`}
+      className={`relative w-full h-full ${isDesktop && hasVideoFrame ? 'bg-transparent' : 'bg-[#07090e]'} flex items-center justify-center select-none overflow-hidden group font-sans touch-none`}
     >
       {!isDesktop ? (
         <video
@@ -870,6 +915,19 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
           onClick={togglePlay}
           className="w-full h-full cursor-pointer focus:outline-none bg-transparent"
         />
+      )}
+
+      {/* Dark Cinema Solid Background until First Video Frame is Decoded */}
+      {isDesktop && !hasVideoFrame && (
+        <div className="absolute inset-0 z-10 bg-[#07090e] flex flex-col items-center justify-center select-none pointer-events-none">
+          <div className="w-14 h-14 border-4 border-cinema-gold/20 border-t-cinema-gold rounded-full animate-spin mb-4 shadow-glow-gold" />
+          <span className="text-sm font-semibold text-slate-200 tracking-wider">
+            Запуск прямого воспроизведения MPV...
+          </span>
+          <span className="text-xs text-cinema-gold/80 mt-1 font-medium">
+            {media.title}
+          </span>
+        </div>
       )}
 
       {/* Floating Reaction Overlay */}

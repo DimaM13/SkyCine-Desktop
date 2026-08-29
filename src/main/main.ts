@@ -22,6 +22,7 @@ async function createWindow() {
     maximizable: true,
     fullscreenable: true,
     title: 'SkyCine Cinema Desktop',
+    icon: path.join(__dirname, '..', '..', 'build', 'icon.png'),
     webPreferences: {
       preload: preloadPath,
       nodeIntegration: false,

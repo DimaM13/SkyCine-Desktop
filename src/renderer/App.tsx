@@ -59,14 +59,10 @@ const MainLayout: React.FC = () => {
     (/^\/rooms\/[a-zA-Z0-9_-]+$/.test(location.pathname) && location.pathname !== '/rooms');
 
   useEffect(() => {
-    if (isDesktop) {
-      if (isPlayerScreen) {
-        document.body.style.backgroundColor = 'transparent';
-      } else {
-        document.body.style.backgroundColor = '#07090e';
-        (window as any).desktopPlayer?.closePlayer?.();
-      }
-    } else {
+    if (isDesktop && !isPlayerScreen) {
+      document.body.style.backgroundColor = '#07090e';
+      (window as any).desktopPlayer?.closePlayer?.();
+    } else if (!isDesktop) {
       document.body.style.backgroundColor = '#07090e';
     }
   }, [isPlayerScreen, isDesktop]);
