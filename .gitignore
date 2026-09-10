@@ -13,9 +13,21 @@ mpv_runtime.log
 bin/*.exe
 bin/*.com
 bin/*.7z
+bin/*.dll
+bin/*.pdb
 bin/mpv/
 bin/doc/
 bin/installer/
+bin/python/
+bin/vapoursynth/*.dll
+bin/vapoursynth/*.pdb
+bin/vapoursynth/*.exe
+bin/vapoursynth/*.pyd
+bin/vapoursynth/plugins/
+bin/vapoursynth/include/
+bin/vapoursynth/pkgconfig/
+bin/vapoursynth/models/
+bin/vapoursynth/__pycache__/
 
 # OS & IDE
 .DS_Store

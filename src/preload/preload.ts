@@ -12,6 +12,8 @@ export interface DesktopPlayerApi {
   setAudioTrack: (id: number) => Promise<void>;
   setSubtitleTrack: (id: number | 'no') => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
+  setRifeMode: (mode: 'off' | 'auto') => Promise<void>;
+  getRifeMode: () => Promise<'off' | 'auto'>;
   showOsdText: (text: string, durationMs?: number) => Promise<void>;
   closePlayer: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
@@ -41,6 +43,8 @@ const desktopPlayer: DesktopPlayerApi = {
   setAudioTrack: (id) => ipcRenderer.invoke('mpv:setAudioTrack', id),
   setSubtitleTrack(id) { return ipcRenderer.invoke('mpv:setSubtitleTrack', id); },
   setSpeed: (speed) => ipcRenderer.invoke('mpv:setSpeed', speed),
+  setRifeMode: (mode) => ipcRenderer.invoke('mpv:setRifeMode', mode),
+  getRifeMode: () => ipcRenderer.invoke('mpv:getRifeMode'),
   showOsdText: (text, durationMs = 2000) => ipcRenderer.invoke('mpv:showOsd', text, durationMs),
   closePlayer: () => ipcRenderer.invoke('mpv:close'),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggleFullscreen'),

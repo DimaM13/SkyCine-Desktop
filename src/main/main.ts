@@ -169,6 +169,14 @@ async function createWindow() {
     await mpv?.setSpeed(speed);
   });
 
+  ipcMain.handle('mpv:setRifeMode', async (_, mode: 'off' | 'auto') => {
+    await mpv?.setRifeMode(mode);
+  });
+
+  ipcMain.handle('mpv:getRifeMode', () => {
+    return mpv?.getRifeMode() || 'off';
+  });
+
   ipcMain.handle('mpv:close', async () => {
     mpv?.destroy();
   });

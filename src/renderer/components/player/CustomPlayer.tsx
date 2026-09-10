@@ -5,7 +5,7 @@ import {
   RotateCcw, RotateCw, Settings, MessageSquare,
   Users, Radio, Disc3, Subtitles, Volume1,
   ArrowLeft, Share2, Activity, Cpu, Film, Music,
-  Minus, Square, X
+  Minus, Square, X, Sparkles
 } from 'lucide-react';
 import { MediaItem, MediaTrack, RoomState } from '../../types';
 import { ReactionOverlay } from './ReactionOverlay';
@@ -102,8 +102,17 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const [selectedQuality, setSelectedQuality] = useState<string>('original');
   const [selectedAudioTrack, setSelectedAudioTrack] = useState<number>(defaultAudioTrackIndex);
   const [selectedSubtitleTrack, setSelectedSubtitleTrack] = useState<number>(-1);
+  const [rifeMode, setRifeModeState] = useState<'off' | 'auto'>('off');
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
-  const [activeMenuTab, setActiveMenuTab] = useState<'root' | 'quality' | 'audio' | 'subtitles'>('root');
+  const [activeMenuTab, setActiveMenuTab] = useState<'root' | 'quality' | 'audio' | 'subtitles' | 'rife'>('root');
+
+  const handleSetRifeMode = (mode: 'off' | 'auto') => {
+    setRifeModeState(mode);
+    if (isDesktop) {
+      const dp = (window as any).desktopPlayer;
+      dp?.setRifeMode?.(mode);
+    }
+  };
 
   const isAppleDevice = useMemo(() => {
     if (typeof navigator === 'undefined') return false;
@@ -294,9 +303,19 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     return () => {
       if (isDesktop) {
         document.body.style.backgroundColor = '#07090e';
+        const dp = (window as any).desktopPlayer;
+        dp?.setRifeMode?.('off');
       }
     };
   }, [isDesktop]);
+
+  useEffect(() => {
+    setRifeModeState('off');
+    if (isDesktop) {
+      const dp = (window as any).desktopPlayer;
+      dp?.setRifeMode?.('off');
+    }
+  }, [media.id, isDesktop]);
 
   useEffect(() => {
     if (!isDesktop) return;
@@ -340,10 +359,14 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   }, [isDesktop, isScrubbing]);
 
   const loadStreamSource = useCallback((url: string, isDirect: boolean, shouldPlay: boolean = false, startPos: number = 0) => {
+    setRifeModeState('off');
     if (isDesktop) {
       const dp = (window as any).desktopPlayer;
+      dp?.setRifeMode?.('off');
       const token = localStorage.getItem('myplex_token');
-      const directUrl = `${getServerUrl()}/api/stream/${media.id}/direct${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+      const tokenParam = token ? `token=${encodeURIComponent(token)}` : '';
+      const params = ['client=desktop', tokenParam].filter(Boolean).join('&');
+      const directUrl = `${getServerUrl()}/api/stream/${media.id}/direct?${params}`;
       console.log('[CustomPlayer] 🎬 Starting MPV Direct Play:', directUrl);
       setIsBuffering(true);
       dp?.loadFile(directUrl, startPos, media.title);
@@ -550,7 +573,8 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     const serverUrl = getServerUrl();
 
     if (isDirectPlay) {
-      const params = [tokenParam, roomParam].filter(Boolean).join('&');
+      const clientParam = isDesktop ? 'client=desktop' : '';
+      const params = [clientParam, tokenParam, roomParam].filter(Boolean).join('&');
       return `${serverUrl}/api/stream/${media.id}/direct${params ? `?${params}` : ''}`;
     }
 
@@ -1005,6 +1029,14 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
                 </span>
               )}
 
+              {/* RIFE AI 60 FPS Badge (Desktop Only) */}
+              {isDesktop && rifeMode !== 'off' && (
+                <span className="px-2.5 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1.5 shadow-sm backdrop-blur-md">
+                  <Sparkles className="w-3 h-3 text-cinema-gold animate-pulse" />
+                  RIFE AI 60 FPS (АВТО)
+                </span>
+              )}
+
               {/* Watch Together Badge */}
               {isWatchTogether && (
                 <span className="px-2.5 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1 shadow-sm backdrop-blur-md">
@@ -1118,6 +1150,14 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
               <span className="text-slate-400">Движок плеера:</span>
               <span className="text-cinema-gold font-mono">{streamBadges.engineLabel}</span>
             </div>
+            {isDesktop && (
+              <div className="flex justify-between items-center px-1">
+                <span className="text-slate-400">Генерация кадров (AI):</span>
+                <span className={`font-mono ${rifeMode !== 'off' ? 'text-cinema-gold font-bold' : 'text-slate-400'}`}>
+                  {rifeMode === 'off' ? 'Отключено' : 'RIFE v4.6 Vulkan (Авто 60 FPS)'}
+                </span>
+              </div>
+            )}
             {effectiveDuration > 0 && (
               <div className="flex justify-between items-center px-1 border-t border-white/5 pt-2 text-[10px]">
                 <span className="text-slate-500">Буфер / Длина:</span>
@@ -1263,6 +1303,14 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
                         <span className="flex items-center gap-2"><Subtitles className="w-4 h-4 text-cinema-gold" /> Субтитры</span>
                         <span className="text-slate-400">{selectedSubtitleTrack === -1 ? 'Выкл' : 'Вкл'}</span>
                       </button>
+                      {isDesktop && (
+                        <button onClick={() => setActiveMenuTab('rife')} className="flex items-center justify-between p-2 rounded-lg hover:bg-white/10">
+                          <span className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-cinema-gold animate-pulse" /> Плавность RIFE AI</span>
+                          <span className="text-cinema-gold font-medium">
+                            {rifeMode === 'off' ? 'Выкл' : 'Авто (60 FPS)'}
+                          </span>
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -1319,6 +1367,48 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
                         >
                           <span>{s.title || `Субтитры #${s.streamIndex}`}</span>
                           {selectedSubtitleTrack === s.streamIndex && <span>✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {activeMenuTab === 'rife' && (
+                    <div className="flex flex-col gap-1.5">
+                      <button onClick={() => setActiveMenuTab('root')} className="text-left text-[11px] text-cinema-gold font-semibold mb-1">
+                        ← Назад
+                      </button>
+                      <div className="text-[10px] text-slate-400 px-1 pb-1 leading-snug">
+                        Аппаратная генерация плавности 60 FPS на GPU (RIFE v4.6 Vulkan NCNN)
+                      </div>
+                      {[
+                        {
+                          id: 'off',
+                          title: 'Отключено',
+                          desc: 'Оригинальная частота кадров видео'
+                        },
+                        {
+                          id: 'auto',
+                          title: 'Авто (60 FPS)',
+                          desc: 'Адаптивный подбор под вашу видеокарту и FPS видео'
+                        }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            handleSetRifeMode(item.id as 'off' | 'auto');
+                            setShowSettingsMenu(false);
+                          }}
+                          className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                            rifeMode === item.id
+                              ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
+                              : 'hover:bg-white/10 text-slate-200'
+                          }`}
+                        >
+                          <div>
+                            <p className="font-semibold text-xs leading-tight">{item.title}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
+                          </div>
+                          {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
                         </button>
                       ))}
                     </div>
