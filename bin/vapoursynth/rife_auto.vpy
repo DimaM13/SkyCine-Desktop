@@ -132,9 +132,23 @@ else:
     # 5. Downscale to fast RGBS for RIFE optical flow
     low_rgb = core.resize.Bicubic(base_clip, width=target_w, height=target_h, format=vs.RGBS, matrix_in_s="709")
 
-    # 6. RIFE 2x motion interpolation on GPU
+    # 6. Ultra-fast hardware scene cut detection:
+    # Calculates frame difference between adjacent frames to identify real cuts
+    low_rgb_next = low_rgb[1:] + low_rgb[-1]
+    stats = core.std.PlaneStats(low_rgb, low_rgb_next, plane=0)
+
+    def detect_sc(n, f):
+        fout = f[0].copy()
+        diff = f[1].props.get('PlaneStatsDiff', 0.0)
+        # Hard cuts between distinct camera shots typically exceed 0.15 difference
+        fout.props['_SceneChangeNext'] = 1 if diff > 0.15 else 0
+        return fout
+
+    low_rgb_sc = core.std.ModifyFrame(low_rgb, [low_rgb, stats], selector=detect_sc)
+
+    # 7. RIFE 2x motion interpolation on GPU with active scene cut protection
     interpolated_rgb = core.rife.RIFE(
-        low_rgb,
+        low_rgb_sc,
         model_path=model_path,
         factor_num=2,
         sc=1,
