@@ -366,8 +366,9 @@ export class MpvController extends EventEmitter {
       console.log(`[MPV Controller] 🚀 Enabling RIFE AI adaptive 60 FPS frame generation: ${scriptPath}`);
 
       let is4K = false;
+      let detectedFps = 0;
       try {
-        for (let attempt = 0; attempt < 5; attempt++) {
+        for (let attempt = 0; attempt < 8; attempt++) {
           const res = await this.sendCommand(['get_property', 'video-params']);
           if (res && res.data && (res.data.w || res.data.h)) {
             const w = res.data.w || 0;
@@ -375,12 +376,43 @@ export class MpvController extends EventEmitter {
             if (w > 1920 || h > 1080) {
               is4K = true;
             }
+          }
+
+          const fpsRes = await this.sendCommand(['get_property', 'container-fps']);
+          if (fpsRes && typeof fpsRes.data === 'number' && fpsRes.data > 0) {
+            detectedFps = fpsRes.data;
+          } else {
+            const vfFpsRes = await this.sendCommand(['get_property', 'estimated-vf-fps']);
+            if (vfFpsRes && typeof vfFpsRes.data === 'number' && vfFpsRes.data > 0) {
+              detectedFps = vfFpsRes.data;
+            }
+          }
+
+          if (detectedFps > 0) {
             break;
           }
           await new Promise((r) => setTimeout(r, 100));
         }
       } catch (e) {
-        console.warn('[MPV Controller] Could not fetch video-params:', e);
+        console.warn('[MPV Controller] Could not fetch video properties:', e);
+      }
+
+      // Save current playback state for VapourSynth script
+      try {
+        const appData = process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME || '', 'Library', 'Preferences') : '/var/local');
+        const vsConfigDir = path.join(appData, 'vapoursynth');
+        if (!fs.existsSync(vsConfigDir)) {
+          fs.mkdirSync(vsConfigDir, { recursive: true });
+        }
+        const stateFile = path.join(vsConfigDir, 'current_playback.json');
+        fs.writeFileSync(stateFile, JSON.stringify({
+          fps: detectedFps || 24,
+          is4K,
+          timestamp: Date.now()
+        }), 'utf-8');
+        console.log(`[MPV Controller] 💾 Saved current playback state: fps=${detectedFps}, is4K=${is4K}`);
+      } catch (err) {
+        console.warn('[MPV Controller] Could not write current_playback.json:', err);
       }
 
       // 4K UHD optimization: downscale 4K base to 720p (w=1280) before RIFE.
@@ -391,7 +423,7 @@ export class MpvController extends EventEmitter {
         ? 'scale=w=1280:h=-2:flags=fast_bilinear'
         : 'scale=w="min(1920,iw)":h=-2:flags=fast_bilinear';
 
-      console.log(`[MPV Controller] 🎯 RIFE video scale configured: is4K=${is4K}, filter=${scaleFilter}`);
+      console.log(`[MPV Controller] 🎯 RIFE video scale configured: is4K=${is4K}, fps=${detectedFps}, filter=${scaleFilter}`);
 
       const vfChain = [
         scaleFilter,

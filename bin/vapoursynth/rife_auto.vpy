@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+from fractions import Fraction
 import vapoursynth as vs
 
 core = vs.core
@@ -14,19 +15,64 @@ core.std.LoadPlugin(plugin_path)
 
 clip = video_in
 
-# 1. Bypass if framerate is already high (>= 45 FPS)
-fps = clip.fps_num / clip.fps_den if clip.fps_den != 0 else 24
+def to_fraction(fps_val):
+    standards = [
+        (23.976023976, 24000, 1001),
+        (24.0, 24, 1),
+        (25.0, 25, 1),
+        (29.97002997, 30000, 1001),
+        (30.0, 30, 1),
+        (50.0, 50, 1),
+        (59.94005994, 60000, 1001),
+        (60.0, 60, 1)
+    ]
+    for s_val, num, den in standards:
+        if abs(fps_val - s_val) < 0.05:
+            return num, den
+    try:
+        f = Fraction(fps_val).limit_denominator(1001)
+        return f.numerator, f.denominator
+    except Exception:
+        return 24, 1
+
+# 1. Determine actual playback framerate from MPV state file or clip metadata
+fps = 0.0
+is_4k_hint = False
+try:
+    app_data = os.environ.get("APPDATA", "")
+    state_file = os.path.join(app_data, "vapoursynth", "current_playback.json")
+    if os.path.isfile(state_file):
+        with open(state_file, "r", encoding="utf-8") as f:
+            sdata = json.load(f)
+            if sdata.get("fps") and float(sdata["fps"]) > 0:
+                fps = float(sdata["fps"])
+            if sdata.get("is4K"):
+                is_4k_hint = bool(sdata["is4K"])
+except Exception:
+    pass
+
+if fps <= 0:
+    if clip.fps_den != 0 and clip.fps_num != 0:
+        fps = clip.fps_num / clip.fps_den
+    else:
+        fps = 24.0
+
+# Critical: Assign strict, monotonic timestamps via AssumeFPS to eliminate duplicate PTS drops
+fps_num, fps_den = to_fraction(fps)
+clip = core.std.AssumeFPS(clip, fpsnum=fps_num, fpsden=fps_den)
+
+# 2. Bypass if framerate is already high (>= 45 FPS)
 if fps >= 45:
     clip.set_output()
 else:
     w = clip.width
     h = clip.height
 
-    # 2. 4K / UHD optimization fallback:
-    # If video resolution exceeds 1080p, downscale to a 1080p base while strictly preserving
+    # 3. 4K / UHD optimization fallback:
+    # If video resolution exceeds 1080p, downscale to a 720p base while strictly preserving
     # the exact aspect ratio and aligning to multiples of 32 for optimal GPU tensor alignment.
-    is_4k = (w > 1920 or h > 1080)
-    if is_4k:
+    is_4k = (w > 1920 or h > 1080 or is_4k_hint)
+    if w > 1920 or h > 1080:
         scale_4k = min(1280.0 / w, 720.0 / h)
         base_w = int(round((w * scale_4k) / 32)) * 32
         base_h = int(round((h * scale_4k) / 32)) * 32
@@ -36,14 +82,17 @@ else:
         base_h = h
         base_clip = clip
 
-    # 3. Determine optimal optical flow scale factor based on frame rate and benchmark
-    # Target frame budgets (allowing 2-3ms headroom for GPU video output and display sync):
-    # 24 FPS (48 FPS display): 20.8ms interval -> budget 18.0ms.
-    # 30 FPS (60 FPS display): 16.6ms interval -> budget 14.5ms.
-    frame_budget_ms = 14.5 if (is_4k or fps > 25.5) else 18.0
+    # 4. Dynamic frame budget calculation based on target display framerate:
+    # Target frame interval = 1000.0 / (fps * 2)
+    # Total MPV overhead (hwdec copy, nv12->yuv420p swscale, vo/gpu-next render) is ~5.0-5.5ms
+    # Usable budget for the RIFE neural network:
+    target_fps = fps * 2.0
+    frame_interval_ms = 1000.0 / target_fps
+    overhead_ms = 5.5
+    frame_budget_ms = max(6.0, frame_interval_ms - overhead_ms)
 
-    # Scale factor ladder:
-    # 720p eq: 0.667 | 540p eq: 0.500 | 480p eq: 0.444 | 360p eq: 0.333
+    # Resolution ladder: 1080, 720, 540, 480, 360
+    # Pick the highest quality resolution that reliably runs within frame_budget_ms
     scale_factor = None
     try:
         app_data = os.environ.get("APPDATA", "")
@@ -63,7 +112,7 @@ else:
                 if (not is_4k) or res_h <= 720:
                     raw_t = timings.get(str(res_h))
                     if raw_t is not None:
-                        # Benchmark measures complete pipeline; add 5% safety margin
+                        # 5% safety margin on benchmark timing
                         effective_t = float(raw_t) * 1.05
                         if effective_t <= frame_budget_ms:
                             scale_factor = s
@@ -72,8 +121,8 @@ else:
         scale_factor = None
 
     if scale_factor is None:
-        # Fallback scale factor
-        scale_factor = 0.444 if (is_4k or fps > 25.5) else 0.500
+        # Fallback scale factor if no benchmark is found
+        scale_factor = 0.333 if fps > 25.5 else 0.444
 
     # 4. Compute target width & height strictly aligned to multiples of 32!
     # Tensor cores require dimensions to be divisible by 32 for maximum hardware throughput.
