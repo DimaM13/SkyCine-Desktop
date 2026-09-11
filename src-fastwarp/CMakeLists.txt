@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20)
 project(fastwarp LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -13,7 +13,7 @@ add_library(fastwarp SHARED
 )
 
 target_include_directories(fastwarp PRIVATE
-    /include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 if(OpenMP_CXX_FOUND)
