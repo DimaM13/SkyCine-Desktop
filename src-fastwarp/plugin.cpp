@@ -4,6 +4,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 
 struct FastWarpData {
     VSNode* node0;
@@ -263,13 +264,28 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
 }
 
 static void VS_CC fastwarpFree(void* instanceData, VSCore* core, const VSAPI* vsapi) {
+    FILE* logf = fopen("C:\\Users\\dimam\\fastwarp_free.log", "w");
+    if (logf) { fprintf(logf, "fastwarpFree entered\n"); fflush(logf); }
+
     FastWarpData* d = static_cast<FastWarpData*>(instanceData);
     if (d) {
-        if (d->node0) vsapi->freeNode(d->node0);
-        if (d->node1) vsapi->freeNode(d->node1);
-        if (d->nodeFlow) vsapi->freeNode(d->nodeFlow);
+        if (d->node0) {
+            if (logf) { fprintf(logf, "freeing node0 %p\n", d->node0); fflush(logf); }
+            vsapi->freeNode(d->node0);
+        }
+        if (d->node1) {
+            if (logf) { fprintf(logf, "freeing node1 %p\n", d->node1); fflush(logf); }
+            vsapi->freeNode(d->node1);
+        }
+        if (d->nodeFlow) {
+            if (logf) { fprintf(logf, "freeing nodeFlow %p\n", d->nodeFlow); fflush(logf); }
+            vsapi->freeNode(d->nodeFlow);
+        }
+        if (logf) { fprintf(logf, "deleting d\n"); fflush(logf); }
         delete d;
+        if (logf) { fprintf(logf, "delete d finished\n"); fflush(logf); }
     }
+    if (logf) { fprintf(logf, "fastwarpFree completed successfully\n"); fclose(logf); }
 }
 
 static void VS_CC fastwarpCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi) {
