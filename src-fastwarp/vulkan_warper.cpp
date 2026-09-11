@@ -38,21 +38,26 @@ void VulkanWarper::cleanup() {
         if (stagingDownload) vkDestroyBuffer(device, stagingDownload, nullptr);
         if (stagingDownloadMem) vkFreeMemory(device, stagingDownloadMem, nullptr);
 
-        if (img0_view) vkDestroyImageView(device, img0_view, nullptr);
-        if (img0) vkDestroyImage(device, img0, nullptr);
-        if (img0_mem) vkFreeMemory(device, img0_mem, nullptr);
+        auto destroyImg = [this](VkImage& img, VkDeviceMemory& mem, VkImageView& view) {
+            if (view) vkDestroyImageView(device, view, nullptr);
+            if (img) vkDestroyImage(device, img, nullptr);
+            if (mem) vkFreeMemory(device, mem, nullptr);
+            view = VK_NULL_HANDLE; img = VK_NULL_HANDLE; mem = VK_NULL_HANDLE;
+        };
 
-        if (img1_view) vkDestroyImageView(device, img1_view, nullptr);
-        if (img1) vkDestroyImage(device, img1, nullptr);
-        if (img1_mem) vkFreeMemory(device, img1_mem, nullptr);
+        destroyImg(img0_y, img0_y_mem, img0_y_view);
+        destroyImg(img1_y, img1_y_mem, img1_y_view);
+        destroyImg(out_y, out_y_mem, out_y_view);
 
-        if (flow_view) vkDestroyImageView(device, flow_view, nullptr);
-        if (flowImg) vkDestroyImage(device, flowImg, nullptr);
-        if (flow_mem) vkFreeMemory(device, flow_mem, nullptr);
+        destroyImg(img0_u, img0_u_mem, img0_u_view);
+        destroyImg(img1_u, img1_u_mem, img1_u_view);
+        destroyImg(out_u, out_u_mem, out_u_view);
 
-        if (out_view) vkDestroyImageView(device, out_view, nullptr);
-        if (outImg) vkDestroyImage(device, outImg, nullptr);
-        if (out_mem) vkFreeMemory(device, out_mem, nullptr);
+        destroyImg(img0_v, img0_v_mem, img0_v_view);
+        destroyImg(img1_v, img1_v_mem, img1_v_view);
+        destroyImg(out_v, out_v_mem, out_v_view);
+
+        destroyImg(flowImg, flow_mem, flow_view);
 
         if (fence) vkDestroyFence(device, fence, nullptr);
         if (linearSampler) vkDestroySampler(device, linearSampler, nullptr);
@@ -162,10 +167,12 @@ bool VulkanWarper::createShaderModule(const uint32_t* code, size_t size, VkShade
     return (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) == VK_SUCCESS);
 }
 
-bool VulkanWarper::init(int gpu_id, int max_w, int max_h, int flow_w, int flow_h) {
+bool VulkanWarper::init(int gpu_id, int width, int height, int flow_w, int flow_h) {
     m_gpu_id = gpu_id;
-    m_max_w = max_w;
-    m_max_h = max_h;
+    m_width = width;
+    m_height = height;
+    m_uv_w = width / 2;
+    m_uv_h = height / 2;
     m_flow_w = flow_w;
     m_flow_h = flow_h;
 
@@ -261,21 +268,12 @@ bool VulkanWarper::init(int gpu_id, int max_w, int max_h, int flow_w, int flow_h
 
     // Descriptor Set Layout
     VkDescriptorSetLayoutBinding bindings[4]{};
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    bindings[2].binding = 2;
-    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
+    for (int i = 0; i < 3; i++) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
     bindings[3].binding = 3;
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[3].descriptorCount = 1;
@@ -321,74 +319,102 @@ bool VulkanWarper::init(int gpu_id, int max_w, int max_h, int flow_w, int flow_h
     vkDestroyShaderModule(device, shaderModule, nullptr);
     if (pipeRes != VK_SUCCESS) return false;
 
-    // Descriptor Pool & Set
+    // Descriptor Pool (allocated for 3 descriptor sets: Y, U, V)
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 3;
+    poolSizes[0].descriptorCount = 9; // 3 sets * 3 samplers
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[1].descriptorCount = 1;
+    poolSizes[1].descriptorCount = 3; // 3 sets * 1 image
 
     VkDescriptorPoolCreateInfo descPoolInfo{};
     descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    descPoolInfo.maxSets = 1;
+    descPoolInfo.maxSets = 3;
     descPoolInfo.poolSizeCount = 2;
     descPoolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(device, &descPoolInfo, nullptr, &descriptorPool) != VK_SUCCESS) return false;
 
+    VkDescriptorSetLayout layouts[3] = { descriptorSetLayout, descriptorSetLayout, descriptorSetLayout };
     VkDescriptorSetAllocateInfo descAllocInfo{};
     descAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     descAllocInfo.descriptorPool = descriptorPool;
-    descAllocInfo.descriptorSetCount = 1;
-    descAllocInfo.pSetLayouts = &descriptorSetLayout;
-    if (vkAllocateDescriptorSets(device, &descAllocInfo, &descriptorSet) != VK_SUCCESS) return false;
+    descAllocInfo.descriptorSetCount = 3;
+    descAllocInfo.pSetLayouts = layouts;
+    VkDescriptorSet descSets[3];
+    if (vkAllocateDescriptorSets(device, &descAllocInfo, descSets) != VK_SUCCESS) return false;
+    descSetY = descSets[0];
+    descSetU = descSets[1];
+    descSetV = descSets[2];
 
-    // Allocate GPU Textures
+    // Allocate GPU Images
     VkImageUsageFlags srcUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     VkImageUsageFlags dstUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
-    if (!createImage(max_w, max_h, VK_FORMAT_R8_UNORM, srcUsage, img0, img0_mem)) return false;
-    img0_view = createImageView(img0, VK_FORMAT_R8_UNORM);
+    // Y Plane (width x height)
+    if (!createImage(width, height, VK_FORMAT_R8_UNORM, srcUsage, img0_y, img0_y_mem)) return false;
+    img0_y_view = createImageView(img0_y, VK_FORMAT_R8_UNORM);
+    if (!createImage(width, height, VK_FORMAT_R8_UNORM, srcUsage, img1_y, img1_y_mem)) return false;
+    img1_y_view = createImageView(img1_y, VK_FORMAT_R8_UNORM);
+    if (!createImage(width, height, VK_FORMAT_R8_UNORM, dstUsage, out_y, out_y_mem)) return false;
+    out_y_view = createImageView(out_y, VK_FORMAT_R8_UNORM);
 
-    if (!createImage(max_w, max_h, VK_FORMAT_R8_UNORM, srcUsage, img1, img1_mem)) return false;
-    img1_view = createImageView(img1, VK_FORMAT_R8_UNORM);
+    // U Plane (uv_w x uv_h)
+    if (!createImage(m_uv_w, m_uv_h, VK_FORMAT_R8_UNORM, srcUsage, img0_u, img0_u_mem)) return false;
+    img0_u_view = createImageView(img0_u, VK_FORMAT_R8_UNORM);
+    if (!createImage(m_uv_w, m_uv_h, VK_FORMAT_R8_UNORM, srcUsage, img1_u, img1_u_mem)) return false;
+    img1_u_view = createImageView(img1_u, VK_FORMAT_R8_UNORM);
+    if (!createImage(m_uv_w, m_uv_h, VK_FORMAT_R8_UNORM, dstUsage, out_u, out_u_mem)) return false;
+    out_u_view = createImageView(out_u, VK_FORMAT_R8_UNORM);
 
+    // V Plane (uv_w x uv_h)
+    if (!createImage(m_uv_w, m_uv_h, VK_FORMAT_R8_UNORM, srcUsage, img0_v, img0_v_mem)) return false;
+    img0_v_view = createImageView(img0_v, VK_FORMAT_R8_UNORM);
+    if (!createImage(m_uv_w, m_uv_h, VK_FORMAT_R8_UNORM, srcUsage, img1_v, img1_v_mem)) return false;
+    img1_v_view = createImageView(img1_v, VK_FORMAT_R8_UNORM);
+    if (!createImage(m_uv_w, m_uv_h, VK_FORMAT_R8_UNORM, dstUsage, out_v, out_v_mem)) return false;
+    out_v_view = createImageView(out_v, VK_FORMAT_R8_UNORM);
+
+    // Flow Image (flow_w x flow_h, RGBA32F)
     if (!createImage(flow_w, flow_h, VK_FORMAT_R32G32B32A32_SFLOAT, srcUsage, flowImg, flow_mem)) return false;
     flow_view = createImageView(flowImg, VK_FORMAT_R32G32B32A32_SFLOAT);
 
-    if (!createImage(max_w, max_h, VK_FORMAT_R8_UNORM, dstUsage, outImg, out_mem)) return false;
-    out_view = createImageView(outImg, VK_FORMAT_R8_UNORM);
+    // Helper to update descriptor set for plane
+    auto setupDescSet = [this](VkDescriptorSet dSet, VkImageView v0, VkImageView v1, VkImageView vOut) {
+        VkDescriptorImageInfo imageInfos[4]{};
+        imageInfos[0].sampler = linearSampler;
+        imageInfos[0].imageView = v0;
+        imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    // Update Descriptor Set
-    VkDescriptorImageInfo imageInfos[4]{};
-    imageInfos[0].sampler = linearSampler;
-    imageInfos[0].imageView = img0_view;
-    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[1].sampler = linearSampler;
+        imageInfos[1].imageView = v1;
+        imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    imageInfos[1].sampler = linearSampler;
-    imageInfos[1].imageView = img1_view;
-    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[2].sampler = linearSampler;
+        imageInfos[2].imageView = flow_view;
+        imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    imageInfos[2].sampler = linearSampler;
-    imageInfos[2].imageView = flow_view;
-    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[3].imageView = vOut;
+        imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    imageInfos[3].imageView = out_view;
-    imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkWriteDescriptorSet writes[4]{};
+        for (int i = 0; i < 4; i++) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = dSet;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = (i < 3) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo = &imageInfos[i];
+        }
+        vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
+    };
 
-    VkWriteDescriptorSet writes[4]{};
-    for (int i = 0; i < 4; i++) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = descriptorSet;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = (i < 3) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writes[i].pImageInfo = &imageInfos[i];
-    }
-    vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
+    setupDescSet(descSetY, img0_y_view, img1_y_view, out_y_view);
+    setupDescSet(descSetU, img0_u_view, img1_u_view, out_u_view);
+    setupDescSet(descSetV, img0_v_view, img1_v_view, out_v_view);
 
-    // Persistent Staging Buffers
-    uploadSize = (VkDeviceSize)max_w * max_h * 2 + (VkDeviceSize)flow_w * flow_h * 4 * sizeof(float);
-    downloadSize = (VkDeviceSize)max_w * max_h;
+    // Single unified staging buffers for zero-allocation DMA transfer
+    size_t frame_bytes = (size_t)width * height + 2 * ((size_t)m_uv_w * m_uv_h);
+    uploadSize = (VkDeviceSize)frame_bytes * 2 + (VkDeviceSize)flow_w * flow_h * 4 * sizeof(float);
+    downloadSize = (VkDeviceSize)frame_bytes;
 
     VkMemoryPropertyFlags hostProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     if (!createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, hostProps, stagingUpload, stagingUploadMem)) return false;
@@ -400,9 +426,10 @@ bool VulkanWarper::init(int gpu_id, int max_w, int max_h, int flow_w, int flow_h
     return true;
 }
 
-bool VulkanWarper::warp_plane(
-    const uint8_t* src0, const uint8_t* src1, uint8_t* dst,
-    int pw, int ph, ptrdiff_t s_stride, ptrdiff_t d_stride,
+bool VulkanWarper::warp_frame_yuv420(
+    const uint8_t* s0_y, const uint8_t* s1_y, uint8_t* dst_y, int w, int h, ptrdiff_t s_stride_y, ptrdiff_t d_stride_y,
+    const uint8_t* s0_u, const uint8_t* s1_u, uint8_t* dst_u, int uv_w, int uv_h, ptrdiff_t s_stride_u, ptrdiff_t d_stride_u,
+    const uint8_t* s0_v, const uint8_t* s1_v, uint8_t* dst_v, ptrdiff_t s_stride_v, ptrdiff_t d_stride_v,
     const float* flow_p0, const float* flow_p1, const float* flow_p2,
     int flow_w, int flow_h, ptrdiff_t flow_stride,
     float time_step
@@ -412,30 +439,35 @@ bool VulkanWarper::warp_plane(
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &fence);
 
-    size_t plane_bytes = (size_t)pw * ph;
-    uint8_t* upload_ptr = static_cast<uint8_t*>(stagingUploadMapped);
+    size_t y_bytes = (size_t)w * h;
+    size_t uv_bytes = (size_t)uv_w * uv_h;
+    size_t frame_bytes = y_bytes + 2 * uv_bytes;
 
-    // Copy src0
-    if (s_stride == pw) {
-        std::memcpy(upload_ptr, src0, plane_bytes);
-    } else {
-        for (int y = 0; y < ph; y++) {
-            std::memcpy(upload_ptr + (size_t)y * pw, src0 + y * s_stride, pw);
+    uint8_t* up = static_cast<uint8_t*>(stagingUploadMapped);
+
+    // 1. Pack Frame 0 (Y, U, V)
+    auto copyPlane = [](uint8_t* dst, const uint8_t* src, int pw, int ph, ptrdiff_t stride) {
+        if (stride == pw) {
+            std::memcpy(dst, src, (size_t)pw * ph);
+        } else {
+            for (int y = 0; y < ph; y++) {
+                std::memcpy(dst + (size_t)y * pw, src + y * stride, pw);
+            }
         }
-    }
+    };
 
-    // Copy src1
-    uint8_t* upload_src1 = upload_ptr + plane_bytes;
-    if (s_stride == pw) {
-        std::memcpy(upload_src1, src1, plane_bytes);
-    } else {
-        for (int y = 0; y < ph; y++) {
-            std::memcpy(upload_src1 + (size_t)y * pw, src1 + y * s_stride, pw);
-        }
-    }
+    copyPlane(up, s0_y, w, h, s_stride_y);
+    copyPlane(up + y_bytes, s0_u, uv_w, uv_h, s_stride_u);
+    copyPlane(up + y_bytes + uv_bytes, s0_v, uv_w, uv_h, s_stride_v);
 
-    // Copy and pack flow (dx, dy, mask) into RGBA32F
-    float* upload_flow = reinterpret_cast<float*>(upload_src1 + plane_bytes);
+    // 2. Pack Frame 1 (Y, U, V)
+    uint8_t* up1 = up + frame_bytes;
+    copyPlane(up1, s1_y, w, h, s_stride_y);
+    copyPlane(up1 + y_bytes, s1_u, uv_w, uv_h, s_stride_u);
+    copyPlane(up1 + y_bytes + uv_bytes, s1_v, uv_w, uv_h, s_stride_v);
+
+    // 3. Pack Flow (RGBA32F) exactly ONCE
+    float* upload_flow = reinterpret_cast<float*>(up1 + frame_bytes);
     #pragma omp parallel for schedule(static)
     for (int y = 0; y < flow_h; y++) {
         const float* r0 = flow_p0 + y * flow_stride;
@@ -451,134 +483,127 @@ bool VulkanWarper::warp_plane(
         }
     }
 
-    // Record Commands
+    // 4. Record Single Command Buffer
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmdBuffer, &beginInfo);
 
-    // Barrier: Transition staging buffer to transfer src & images to transfer dst
-    VkImageMemoryBarrier barriers[4]{};
-    for (int i = 0; i < 3; i++) {
+    // Barrier: Transition all input images to TRANSFER_DST
+    VkImage inImages[7] = { img0_y, img0_u, img0_v, img1_y, img1_u, img1_v, flowImg };
+    VkImageMemoryBarrier barriers[7]{};
+    for (int i = 0; i < 7; i++) {
         barriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barriers[i].image = inImages[i];
         barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         barriers[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barriers[i].srcAccessMask = 0;
         barriers[i].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barriers[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barriers[i].subresourceRange.baseMipLevel = 0;
         barriers[i].subresourceRange.levelCount = 1;
-        barriers[i].subresourceRange.baseArrayLayer = 0;
         barriers[i].subresourceRange.layerCount = 1;
     }
-    barriers[0].image = img0;
-    barriers[1].image = img1;
-    barriers[2].image = flowImg;
+    vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 7, barriers);
 
-    vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 3, barriers);
+    // Batch Copy Staging -> Textures
+    auto copyToImg = [this](VkDeviceSize offset, VkImage img, uint32_t pw, uint32_t ph) {
+        VkBufferImageCopy copyRegion{};
+        copyRegion.bufferOffset = offset;
+        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.imageSubresource.layerCount = 1;
+        copyRegion.imageExtent = { pw, ph, 1 };
+        vkCmdCopyBufferToImage(cmdBuffer, stagingUpload, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+    };
 
-    // Copy Buffer to Images
-    VkBufferImageCopy copy0{};
-    copy0.bufferOffset = 0;
-    copy0.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copy0.imageSubresource.layerCount = 1;
-    copy0.imageExtent = { (uint32_t)pw, (uint32_t)ph, 1 };
-    vkCmdCopyBufferToImage(cmdBuffer, stagingUpload, img0, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy0);
+    copyToImg(0, img0_y, w, h);
+    copyToImg(y_bytes, img0_u, uv_w, uv_h);
+    copyToImg(y_bytes + uv_bytes, img0_v, uv_w, uv_h);
 
-    VkBufferImageCopy copy1{};
-    copy1.bufferOffset = plane_bytes;
-    copy1.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copy1.imageSubresource.layerCount = 1;
-    copy1.imageExtent = { (uint32_t)pw, (uint32_t)ph, 1 };
-    vkCmdCopyBufferToImage(cmdBuffer, stagingUpload, img1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy1);
+    copyToImg(frame_bytes, img1_y, w, h);
+    copyToImg(frame_bytes + y_bytes, img1_u, uv_w, uv_h);
+    copyToImg(frame_bytes + y_bytes + uv_bytes, img1_v, uv_w, uv_h);
 
-    VkBufferImageCopy copyFlow{};
-    copyFlow.bufferOffset = plane_bytes * 2;
-    copyFlow.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copyFlow.imageSubresource.layerCount = 1;
-    copyFlow.imageExtent = { (uint32_t)flow_w, (uint32_t)flow_h, 1 };
-    vkCmdCopyBufferToImage(cmdBuffer, stagingUpload, flowImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyFlow);
+    copyToImg(frame_bytes * 2, flowImg, flow_w, flow_h);
 
-    // Transition images to Shader Read / General
-    VkImageMemoryBarrier computeBarriers[4]{};
-    for (int i = 0; i < 4; i++) {
+    // Barrier: Transition to Compute Read / Write
+    VkImageMemoryBarrier computeBarriers[10]{};
+    for (int i = 0; i < 7; i++) {
         computeBarriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        computeBarriers[i].image = inImages[i];
+        computeBarriers[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        computeBarriers[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        computeBarriers[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        computeBarriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         computeBarriers[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        computeBarriers[i].subresourceRange.baseMipLevel = 0;
         computeBarriers[i].subresourceRange.levelCount = 1;
-        computeBarriers[i].subresourceRange.baseArrayLayer = 0;
         computeBarriers[i].subresourceRange.layerCount = 1;
     }
-    computeBarriers[0].image = img0;
-    computeBarriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    computeBarriers[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    computeBarriers[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    computeBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    computeBarriers[1].image = img1;
-    computeBarriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    computeBarriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    computeBarriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    computeBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    VkImage outImages[3] = { out_y, out_u, out_v };
+    for (int i = 0; i < 3; i++) {
+        computeBarriers[7 + i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        computeBarriers[7 + i].image = outImages[i];
+        computeBarriers[7 + i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        computeBarriers[7 + i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        computeBarriers[7 + i].srcAccessMask = 0;
+        computeBarriers[7 + i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        computeBarriers[7 + i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        computeBarriers[7 + i].subresourceRange.levelCount = 1;
+        computeBarriers[7 + i].subresourceRange.layerCount = 1;
+    }
+    vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 10, computeBarriers);
 
-    computeBarriers[2].image = flowImg;
-    computeBarriers[2].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    computeBarriers[2].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    computeBarriers[2].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    computeBarriers[2].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-    computeBarriers[3].image = outImg;
-    computeBarriers[3].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    computeBarriers[3].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    computeBarriers[3].srcAccessMask = 0;
-    computeBarriers[3].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-
-    vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 4, computeBarriers);
-
-    // Bind Pipeline & Dispatch
+    // Bind Pipeline
     vkCmdBindPipeline(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-    vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
 
-    PushConstants pc{};
-    pc.out_w = (float)pw;
-    pc.out_h = (float)ph;
-    pc.flow_w = (float)flow_w;
-    pc.flow_h = (float)flow_h;
-    pc.time_step = time_step;
-    pc.pad = 0.0f;
-    vkCmdPushConstants(cmdBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+    // Dispatch Y Plane
+    vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descSetY, 0, nullptr);
+    PushConstants pcY{ (float)w, (float)h, (float)flow_w, (float)flow_h, time_step, 0.0f };
+    vkCmdPushConstants(cmdBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pcY);
+    vkCmdDispatch(cmdBuffer, (w + 15) / 16, (h + 15) / 16, 1);
 
-    uint32_t groupX = (pw + 15) / 16;
-    uint32_t groupY = (ph + 15) / 16;
-    vkCmdDispatch(cmdBuffer, groupX, groupY, 1);
+    // Dispatch U Plane
+    vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descSetU, 0, nullptr);
+    PushConstants pcUV{ (float)uv_w, (float)uv_h, (float)flow_w, (float)flow_h, time_step, 0.0f };
+    vkCmdPushConstants(cmdBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pcUV);
+    vkCmdDispatch(cmdBuffer, (uv_w + 15) / 16, (uv_h + 15) / 16, 1);
 
-    // Barrier: outImg general to transfer src
-    VkImageMemoryBarrier readBarrier{};
-    readBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    readBarrier.image = outImg;
-    readBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    readBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    readBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    readBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    readBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    readBarrier.subresourceRange.baseMipLevel = 0;
-    readBarrier.subresourceRange.levelCount = 1;
-    readBarrier.subresourceRange.baseArrayLayer = 0;
-    readBarrier.subresourceRange.layerCount = 1;
+    // Dispatch V Plane
+    vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descSetV, 0, nullptr);
+    vkCmdDispatch(cmdBuffer, (uv_w + 15) / 16, (uv_h + 15) / 16, 1);
 
-    vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &readBarrier);
+    // Barrier: outImages GENERAL -> TRANSFER_SRC
+    VkImageMemoryBarrier readBarriers[3]{};
+    for (int i = 0; i < 3; i++) {
+        readBarriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        readBarriers[i].image = outImages[i];
+        readBarriers[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        readBarriers[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        readBarriers[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        readBarriers[i].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        readBarriers[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        readBarriers[i].subresourceRange.levelCount = 1;
+        readBarriers[i].subresourceRange.layerCount = 1;
+    }
+    vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 3, readBarriers);
 
-    // Copy outImg to staging download buffer
-    VkBufferImageCopy downloadCopy{};
-    downloadCopy.bufferOffset = 0;
-    downloadCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    downloadCopy.imageSubresource.layerCount = 1;
-    downloadCopy.imageExtent = { (uint32_t)pw, (uint32_t)ph, 1 };
-    vkCmdCopyImageToBuffer(cmdBuffer, outImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingDownload, 1, &downloadCopy);
+    // Copy outImages to Staging Download Buffer
+    auto copyFromImg = [this](VkDeviceSize offset, VkImage img, uint32_t pw, uint32_t ph) {
+        VkBufferImageCopy downloadCopy{};
+        downloadCopy.bufferOffset = offset;
+        downloadCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        downloadCopy.imageSubresource.layerCount = 1;
+        downloadCopy.imageExtent = { pw, ph, 1 };
+        vkCmdCopyImageToBuffer(cmdBuffer, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingDownload, 1, &downloadCopy);
+    };
+
+    copyFromImg(0, out_y, w, h);
+    copyFromImg(y_bytes, out_u, uv_w, uv_h);
+    copyFromImg(y_bytes + uv_bytes, out_v, uv_w, uv_h);
 
     vkEndCommandBuffer(cmdBuffer);
 
-    // Submit
+    // Single Submission to GPU!
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
@@ -586,17 +611,25 @@ bool VulkanWarper::warp_plane(
 
     if (vkQueueSubmit(computeQueue, 1, &submitInfo, fence) != VK_SUCCESS) return false;
 
+    // Single synchronization point!
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
 
-    // Copy readback to dst
-    const uint8_t* download_ptr = static_cast<const uint8_t*>(stagingDownloadMapped);
-    if (d_stride == pw) {
-        std::memcpy(dst, download_ptr, plane_bytes);
-    } else {
-        for (int y = 0; y < ph; y++) {
-            std::memcpy(dst + y * d_stride, download_ptr + (size_t)y * pw, pw);
+    // Copy readback into output frame planes
+    const uint8_t* dl = static_cast<const uint8_t*>(stagingDownloadMapped);
+
+    auto readPlane = [](uint8_t* dst, const uint8_t* src, int pw, int ph, ptrdiff_t stride) {
+        if (stride == pw) {
+            std::memcpy(dst, src, (size_t)pw * ph);
+        } else {
+            for (int y = 0; y < ph; y++) {
+                std::memcpy(dst + y * stride, src + (size_t)y * pw, pw);
+            }
         }
-    }
+    };
+
+    readPlane(dst_y, dl, w, h, d_stride_y);
+    readPlane(dst_u, dl + y_bytes, uv_w, uv_h, d_stride_u);
+    readPlane(dst_v, dl + y_bytes + uv_bytes, uv_w, uv_h, d_stride_v);
 
     return true;
 }

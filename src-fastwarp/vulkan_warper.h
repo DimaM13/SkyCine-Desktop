@@ -10,12 +10,13 @@ public:
     VulkanWarper();
     ~VulkanWarper();
 
-    bool init(int gpu_id, int max_w, int max_h, int flow_w, int flow_h);
+    bool init(int gpu_id, int width, int height, int flow_w, int flow_h);
     void cleanup();
 
-    bool warp_plane(
-        const uint8_t* src0, const uint8_t* src1, uint8_t* dst,
-        int pw, int ph, ptrdiff_t s_stride, ptrdiff_t d_stride,
+    bool warp_frame_yuv420(
+        const uint8_t* s0_y, const uint8_t* s1_y, uint8_t* dst_y, int w, int h, ptrdiff_t s_stride_y, ptrdiff_t d_stride_y,
+        const uint8_t* s0_u, const uint8_t* s1_u, uint8_t* dst_u, int uv_w, int uv_h, ptrdiff_t s_stride_u, ptrdiff_t d_stride_u,
+        const uint8_t* s0_v, const uint8_t* s1_v, uint8_t* dst_v, ptrdiff_t s_stride_v, ptrdiff_t d_stride_v,
         const float* flow_p0, const float* flow_p1, const float* flow_p2,
         int flow_w, int flow_h, ptrdiff_t flow_stride,
         float time_step
@@ -23,8 +24,10 @@ public:
 
 private:
     int m_gpu_id = 0;
-    int m_max_w = 0;
-    int m_max_h = 0;
+    int m_width = 0;
+    int m_height = 0;
+    int m_uv_w = 0;
+    int m_uv_h = 0;
     int m_flow_w = 0;
     int m_flow_h = 0;
 
@@ -40,29 +43,33 @@ private:
 
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSet descSetY = VK_NULL_HANDLE;
+    VkDescriptorSet descSetU = VK_NULL_HANDLE;
+    VkDescriptorSet descSetV = VK_NULL_HANDLE;
+
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkSampler linearSampler = VK_NULL_HANDLE;
 
-    // Persistent GPU Image Resources
-    VkImage img0 = VK_NULL_HANDLE;
-    VkDeviceMemory img0_mem = VK_NULL_HANDLE;
-    VkImageView img0_view = VK_NULL_HANDLE;
+    // Y Plane Images
+    VkImage img0_y = VK_NULL_HANDLE; VkDeviceMemory img0_y_mem = VK_NULL_HANDLE; VkImageView img0_y_view = VK_NULL_HANDLE;
+    VkImage img1_y = VK_NULL_HANDLE; VkDeviceMemory img1_y_mem = VK_NULL_HANDLE; VkImageView img1_y_view = VK_NULL_HANDLE;
+    VkImage out_y = VK_NULL_HANDLE; VkDeviceMemory out_y_mem = VK_NULL_HANDLE; VkImageView out_y_view = VK_NULL_HANDLE;
 
-    VkImage img1 = VK_NULL_HANDLE;
-    VkDeviceMemory img1_mem = VK_NULL_HANDLE;
-    VkImageView img1_view = VK_NULL_HANDLE;
+    // U Plane Images
+    VkImage img0_u = VK_NULL_HANDLE; VkDeviceMemory img0_u_mem = VK_NULL_HANDLE; VkImageView img0_u_view = VK_NULL_HANDLE;
+    VkImage img1_u = VK_NULL_HANDLE; VkDeviceMemory img1_u_mem = VK_NULL_HANDLE; VkImageView img1_u_view = VK_NULL_HANDLE;
+    VkImage out_u = VK_NULL_HANDLE; VkDeviceMemory out_u_mem = VK_NULL_HANDLE; VkImageView out_u_view = VK_NULL_HANDLE;
 
-    VkImage flowImg = VK_NULL_HANDLE;
-    VkDeviceMemory flow_mem = VK_NULL_HANDLE;
-    VkImageView flow_view = VK_NULL_HANDLE;
+    // V Plane Images
+    VkImage img0_v = VK_NULL_HANDLE; VkDeviceMemory img0_v_mem = VK_NULL_HANDLE; VkImageView img0_v_view = VK_NULL_HANDLE;
+    VkImage img1_v = VK_NULL_HANDLE; VkDeviceMemory img1_v_mem = VK_NULL_HANDLE; VkImageView img1_v_view = VK_NULL_HANDLE;
+    VkImage out_v = VK_NULL_HANDLE; VkDeviceMemory out_v_mem = VK_NULL_HANDLE; VkImageView out_v_view = VK_NULL_HANDLE;
 
-    VkImage outImg = VK_NULL_HANDLE;
-    VkDeviceMemory out_mem = VK_NULL_HANDLE;
-    VkImageView out_view = VK_NULL_HANDLE;
+    // Flow Texture
+    VkImage flowImg = VK_NULL_HANDLE; VkDeviceMemory flow_mem = VK_NULL_HANDLE; VkImageView flow_view = VK_NULL_HANDLE;
 
-    // Staging Buffers for zero-allocation DMA transfer
+    // Single unified staging buffers for DMA transfers
     VkDeviceSize uploadSize = 0;
     VkBuffer stagingUpload = VK_NULL_HANDLE;
     VkDeviceMemory stagingUploadMem = VK_NULL_HANDLE;

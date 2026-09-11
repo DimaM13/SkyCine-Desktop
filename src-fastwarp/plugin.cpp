@@ -47,32 +47,39 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
         const VSVideoFormat* flow_fmt = vsapi->getVideoFrameFormat(flow);
         const float* flow_p2 = (flow_fmt->numPlanes > 2) ? reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 2)) : nullptr;
 
-        for (int p = 0; p < d->vi->format.numPlanes; p++) {
-            int pw = vsapi->getFrameWidth(src0, p);
-            int ph = vsapi->getFrameHeight(src0, p);
-            ptrdiff_t s_stride = vsapi->getStride(src0, p);
-            ptrdiff_t d_stride = vsapi->getStride(dst, p);
+        int w = vsapi->getFrameWidth(src0, 0);
+        int h = vsapi->getFrameHeight(src0, 0);
+        int uv_w = vsapi->getFrameWidth(src0, 1);
+        int uv_h = vsapi->getFrameHeight(src0, 1);
 
-            const uint8_t* s0 = vsapi->getReadPtr(src0, p);
-            const uint8_t* s1 = vsapi->getReadPtr(src1, p);
-            uint8_t* d_ptr = vsapi->getWritePtr(dst, p);
+        const uint8_t* s0_y = vsapi->getReadPtr(src0, 0);
+        const uint8_t* s1_y = vsapi->getReadPtr(src1, 0);
+        uint8_t* dst_y = vsapi->getWritePtr(dst, 0);
 
-            bool ok = d->warper->warp_plane(
-                s0, s1, d_ptr,
-                pw, ph, s_stride, d_stride,
-                flow_p0, flow_p1, flow_p2,
-                flow_w, flow_h, flow_stride,
-                d->time_step
-            );
+        const uint8_t* s0_u = vsapi->getReadPtr(src0, 1);
+        const uint8_t* s1_u = vsapi->getReadPtr(src1, 1);
+        uint8_t* dst_u = vsapi->getWritePtr(dst, 1);
 
-            if (!ok) {
-                vsapi->setFilterError("FastWarp: Vulkan GPU execution failed during frame dispatch", frameCtx);
-                vsapi->freeFrame(dst);
-                vsapi->freeFrame(src0);
-                vsapi->freeFrame(src1);
-                vsapi->freeFrame(flow);
-                return nullptr;
-            }
+        const uint8_t* s0_v = vsapi->getReadPtr(src0, 2);
+        const uint8_t* s1_v = vsapi->getReadPtr(src1, 2);
+        uint8_t* dst_v = vsapi->getWritePtr(dst, 2);
+
+        bool ok = d->warper->warp_frame_yuv420(
+            s0_y, s1_y, dst_y, w, h, vsapi->getStride(src0, 0), vsapi->getStride(dst, 0),
+            s0_u, s1_u, dst_u, uv_w, uv_h, vsapi->getStride(src0, 1), vsapi->getStride(dst, 1),
+            s0_v, s1_v, dst_v, uv_w, uv_h, vsapi->getStride(src0, 2), vsapi->getStride(dst, 2),
+            flow_p0, flow_p1, flow_p2,
+            flow_w, flow_h, flow_stride,
+            d->time_step
+        );
+
+        if (!ok) {
+            vsapi->setFilterError("FastWarp: Vulkan GPU execution failed during frame dispatch", frameCtx);
+            vsapi->freeFrame(dst);
+            vsapi->freeFrame(src0);
+            vsapi->freeFrame(src1);
+            vsapi->freeFrame(flow);
+            return nullptr;
         }
 
         vsapi->freeFrame(src0);
