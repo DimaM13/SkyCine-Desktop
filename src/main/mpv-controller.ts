@@ -72,6 +72,7 @@ export class MpvController extends EventEmitter {
   private rifeDetectedBaseFps: number = 24;
   private rifeCurrentTargetRes: number = 720;
   private rifeIsTuning: boolean = false;
+  private rifeApplySequence: number = 0;
 
   constructor() {
     super();
@@ -534,8 +535,13 @@ export class MpvController extends EventEmitter {
         const vfFpsRes = await this.sendCommand(['get_property', 'estimated-vf-fps']);
         const currentVfFps = (vfFpsRes && typeof vfFpsRes.data === 'number') ? vfFpsRes.data : 0;
 
+        if (currentVfFps <= 0) {
+          // No valid filter FPS data yet (seeking, paused, or pipeline warming up)
+          return;
+        }
+
         // If estimated-vf-fps is valid and significantly below target (threshold < 85%)
-        const isUnderperforming = currentVfFps > 0 && currentVfFps < (targetFps * 0.85);
+        const isUnderperforming = currentVfFps < (targetFps * 0.85);
 
         if (isUnderperforming) {
           lagStrikeCount++;
@@ -583,6 +589,7 @@ export class MpvController extends EventEmitter {
   }
 
   private async applyRifeMode(mode: RifeMode, explicitRes?: number): Promise<void> {
+    const seq = ++this.rifeApplySequence;
     const mpvBinPath = findMpvPath();
     const binDir = path.dirname(mpvBinPath);
     const vsDir = path.join(binDir, 'vapoursynth');
@@ -590,6 +597,17 @@ export class MpvController extends EventEmitter {
     if (mode === 'off') {
       console.log('[MPV Controller] 🚫 Disabling RIFE AI frame generation');
       await this.sendCommand(['set_property', 'vf', '']);
+      return;
+    }
+
+    // Force MPV to clear existing vf first so it cleanly unloads any active VapourSynth filter instance
+    try {
+      await this.sendCommand(['set_property', 'vf', '']);
+      await new Promise((r) => setTimeout(r, 60));
+    } catch {}
+
+    if (seq !== this.rifeApplySequence) {
+      console.log(`[MPV Controller] ⏭️ Aborting outdated RIFE apply sequence ${seq}`);
       return;
     }
 
@@ -631,6 +649,8 @@ export class MpvController extends EventEmitter {
       console.warn('[MPV Controller] Could not fetch video properties:', e);
     }
 
+    if (seq !== this.rifeApplySequence) return;
+
     // Save current playback state for VapourSynth script (target_res is dynamic in-memory)
     try {
       const appData = process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME || '', 'Library', 'Preferences') : '/var/local');
@@ -651,17 +671,22 @@ export class MpvController extends EventEmitter {
       console.warn('[MPV Controller] Could not write current_playback.json:', err);
     }
 
+    if (seq !== this.rifeApplySequence) return;
+
     const scaleFilter = is4K
       ? 'scale=w=1280:h=-2:flags=fast_bilinear'
       : 'scale=w="min(1920,iw)":h=-2:flags=fast_bilinear';
 
     console.log(`[MPV Controller] 🎯 RIFE video scale configured: is4K=${is4K}, fps=${detectedFps}, filter=${scaleFilter}`);
 
+    const timestamp = Date.now();
     const vfChain = [
-      scaleFilter,
+      `@scale_${timestamp}:${scaleFilter}`,
       'format=yuv420p',
-      `vapoursynth="${scriptPath}":concurrent-frames=2`
+      `@vs_${timestamp}:vapoursynth="${scriptPath}":concurrent-frames=2`
     ].join(',');
+
+    if (seq !== this.rifeApplySequence) return;
     await this.sendCommand(['set_property', 'vf', vfChain]);
   }
 
