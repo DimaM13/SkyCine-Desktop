@@ -24,9 +24,10 @@ static inline void warp_plane_uint8(
     #pragma omp parallel for schedule(static)
     for (int y = 0; y < ph; y++) {
         float norm_y = ((float)y + 0.5f) / (float)ph;
-        float fy_f = norm_y * (float)flow_h - 0.5f;
-        int fy0 = (int)std::floor(fy_f);
-        if (fy0 < 0) fy0 = 0;
+        if (norm_y < 0.0f) norm_y = 0.0f;
+        if (norm_y > 1.0f) norm_y = 1.0f;
+        float fy_f = norm_y * (float)(flow_h - 1);
+        int fy0 = (int)fy_f;
         if (fy0 > flow_h - 2) fy0 = flow_h - 2;
         int fy1 = fy0 + 1;
         float wy1 = fy_f - (float)fy0;
@@ -36,9 +37,10 @@ static inline void warp_plane_uint8(
 
         for (int x = 0; x < pw; x++) {
             float norm_x = ((float)x + 0.5f) / (float)pw;
-            float fx_f = norm_x * (float)flow_w - 0.5f;
-            int fx0 = (int)std::floor(fx_f);
-            if (fx0 < 0) fx0 = 0;
+            if (norm_x < 0.0f) norm_x = 0.0f;
+            if (norm_x > 1.0f) norm_x = 1.0f;
+            float fx_f = norm_x * (float)(flow_w - 1);
+            int fx0 = (int)fx_f;
             if (fx0 > flow_w - 2) fx0 = flow_w - 2;
             int fx1 = fx0 + 1;
             float wx1 = fx_f - (float)fx0;
@@ -53,8 +55,8 @@ static inline void warp_plane_uint8(
                        (flow_p0[idx10] * wx0 + flow_p0[idx11] * wx1) * wy1;
             float dy = (flow_p1[idx00] * wx0 + flow_p1[idx01] * wx1) * wy0 +
                        (flow_p1[idx10] * wx0 + flow_p1[idx11] * wx1) * wy1;
-            float mask = (flow_p2[idx00] * wx0 + flow_p2[idx01] * wx1) * wy0 +
-                         (flow_p2[idx10] * wx0 + flow_p2[idx11] * wx1) * wy1;
+            float mask = flow_p2 ? ((flow_p2[idx00] * wx0 + flow_p2[idx01] * wx1) * wy0 +
+                                   (flow_p2[idx10] * wx0 + flow_p2[idx11] * wx1) * wy1) : 0.5f;
 
             float sx0 = (float)x + dx * scale_x;
             float sy0 = (float)y + dy * scale_y;
@@ -62,11 +64,14 @@ static inline void warp_plane_uint8(
             float sy1 = (float)y - dy * scale_y;
 
             // Sample src0
-            int ix0 = (int)std::floor(sx0);
-            int iy0 = (int)std::floor(sy0);
-            if (ix0 < 0) ix0 = 0;
+            if (sx0 < 0.0f) sx0 = 0.0f;
+            if (sx0 > (float)(pw - 1)) sx0 = (float)(pw - 1);
+            if (sy0 < 0.0f) sy0 = 0.0f;
+            if (sy0 > (float)(ph - 1)) sy0 = (float)(ph - 1);
+
+            int ix0 = (int)sx0;
             if (ix0 > pw - 2) ix0 = pw - 2;
-            if (iy0 < 0) iy0 = 0;
+            int iy0 = (int)sy0;
             if (iy0 > ph - 2) iy0 = ph - 2;
             float qx1 = sx0 - (float)ix0; float qx0 = 1.0f - qx1;
             float qy1 = sy0 - (float)iy0; float qy0 = 1.0f - qy1;
@@ -76,11 +81,14 @@ static inline void warp_plane_uint8(
                        ((float)p0[s_stride] * qx0 + (float)p0[s_stride + 1] * qx1) * qy1;
 
             // Sample src1
-            int ix1 = (int)std::floor(sx1);
-            int iy1 = (int)std::floor(sy1);
-            if (ix1 < 0) ix1 = 0;
+            if (sx1 < 0.0f) sx1 = 0.0f;
+            if (sx1 > (float)(pw - 1)) sx1 = (float)(pw - 1);
+            if (sy1 < 0.0f) sy1 = 0.0f;
+            if (sy1 > (float)(ph - 1)) sy1 = (float)(ph - 1);
+
+            int ix1 = (int)sx1;
             if (ix1 > pw - 2) ix1 = pw - 2;
-            if (iy1 < 0) iy1 = 0;
+            int iy1 = (int)sy1;
             if (iy1 > ph - 2) iy1 = ph - 2;
             float rx1 = sx1 - (float)ix1; float rx0 = 1.0f - rx1;
             float ry1 = sy1 - (float)iy1; float ry0 = 1.0f - ry1;
@@ -112,9 +120,10 @@ static inline void warp_plane_float(
     #pragma omp parallel for schedule(static)
     for (int y = 0; y < ph; y++) {
         float norm_y = ((float)y + 0.5f) / (float)ph;
-        float fy_f = norm_y * (float)flow_h - 0.5f;
-        int fy0 = (int)std::floor(fy_f);
-        if (fy0 < 0) fy0 = 0;
+        if (norm_y < 0.0f) norm_y = 0.0f;
+        if (norm_y > 1.0f) norm_y = 1.0f;
+        float fy_f = norm_y * (float)(flow_h - 1);
+        int fy0 = (int)fy_f;
         if (fy0 > flow_h - 2) fy0 = flow_h - 2;
         int fy1 = fy0 + 1;
         float wy1 = fy_f - (float)fy0;
@@ -124,9 +133,10 @@ static inline void warp_plane_float(
 
         for (int x = 0; x < pw; x++) {
             float norm_x = ((float)x + 0.5f) / (float)pw;
-            float fx_f = norm_x * (float)flow_w - 0.5f;
-            int fx0 = (int)std::floor(fx_f);
-            if (fx0 < 0) fx0 = 0;
+            if (norm_x < 0.0f) norm_x = 0.0f;
+            if (norm_x > 1.0f) norm_x = 1.0f;
+            float fx_f = norm_x * (float)(flow_w - 1);
+            int fx0 = (int)fx_f;
             if (fx0 > flow_w - 2) fx0 = flow_w - 2;
             int fx1 = fx0 + 1;
             float wx1 = fx_f - (float)fx0;
@@ -141,19 +151,22 @@ static inline void warp_plane_float(
                        (flow_p0[idx10] * wx0 + flow_p0[idx11] * wx1) * wy1;
             float dy = (flow_p1[idx00] * wx0 + flow_p1[idx01] * wx1) * wy0 +
                        (flow_p1[idx10] * wx0 + flow_p1[idx11] * wx1) * wy1;
-            float mask = (flow_p2[idx00] * wx0 + flow_p2[idx01] * wx1) * wy0 +
-                         (flow_p2[idx10] * wx0 + flow_p2[idx11] * wx1) * wy1;
+            float mask = flow_p2 ? ((flow_p2[idx00] * wx0 + flow_p2[idx01] * wx1) * wy0 +
+                                   (flow_p2[idx10] * wx0 + flow_p2[idx11] * wx1) * wy0) : 0.5f;
 
             float sx0 = (float)x + dx * scale_x;
             float sy0 = (float)y + dy * scale_y;
             float sx1 = (float)x - dx * scale_x;
             float sy1 = (float)y - dy * scale_y;
 
-            int ix0 = (int)std::floor(sx0);
-            int iy0 = (int)std::floor(sy0);
-            if (ix0 < 0) ix0 = 0;
+            if (sx0 < 0.0f) sx0 = 0.0f;
+            if (sx0 > (float)(pw - 1)) sx0 = (float)(pw - 1);
+            if (sy0 < 0.0f) sy0 = 0.0f;
+            if (sy0 > (float)(ph - 1)) sy0 = (float)(ph - 1);
+
+            int ix0 = (int)sx0;
             if (ix0 > pw - 2) ix0 = pw - 2;
-            if (iy0 < 0) iy0 = 0;
+            int iy0 = (int)sy0;
             if (iy0 > ph - 2) iy0 = ph - 2;
             float qx1 = sx0 - (float)ix0; float qx0 = 1.0f - qx1;
             float qy1 = sy0 - (float)iy0; float qy0 = 1.0f - qy1;
@@ -162,11 +175,14 @@ static inline void warp_plane_float(
             float c0 = (p0[0] * qx0 + p0[1] * qx1) * qy0 +
                        (p0[s_stride] * qx0 + p0[s_stride + 1] * qx1) * qy1;
 
-            int ix1 = (int)std::floor(sx1);
-            int iy1 = (int)std::floor(sy1);
-            if (ix1 < 0) ix1 = 0;
+            if (sx1 < 0.0f) sx1 = 0.0f;
+            if (sx1 > (float)(pw - 1)) sx1 = (float)(pw - 1);
+            if (sy1 < 0.0f) sy1 = 0.0f;
+            if (sy1 > (float)(ph - 1)) sy1 = (float)(ph - 1);
+
+            int ix1 = (int)sx1;
             if (ix1 > pw - 2) ix1 = pw - 2;
-            if (iy1 < 0) iy1 = 0;
+            int iy1 = (int)sy1;
             if (iy1 > ph - 2) iy1 = ph - 2;
             float rx1 = sx1 - (float)ix1; float rx0 = 1.0f - rx1;
             float ry1 = sy1 - (float)iy1; float ry0 = 1.0f - ry1;
@@ -195,6 +211,8 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
         const VSFrame* src1 = vsapi->getFrameFilter(n, d->node1, frameCtx);
         const VSFrame* flow = vsapi->getFrameFilter(n, d->nodeFlow, frameCtx);
 
+        if (!src0 || !src1 || !flow) return nullptr;
+
         VSFrame* dst = vsapi->newVideoFrame(&d->vi->format, d->vi->width, d->vi->height, src0, core);
 
         int flow_w = vsapi->getFrameWidth(flow, 0);
@@ -203,7 +221,8 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
 
         const float* flow_p0 = reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 0));
         const float* flow_p1 = reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 1));
-        const float* flow_p2 = reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 2));
+        const VSVideoFormat* flow_fmt = vsapi->getVideoFrameFormat(flow);
+        const float* flow_p2 = (flow_fmt->numPlanes > 2) ? reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 2)) : nullptr;
 
         for (int p = 0; p < d->vi->format.numPlanes; p++) {
             int pw = vsapi->getFrameWidth(src0, p);
@@ -235,10 +254,6 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
                 );
             }
         }
-
-        vsapi->freeFrame(src0);
-        vsapi->freeFrame(src1);
-        vsapi->freeFrame(flow);
 
         return dst;
     }
