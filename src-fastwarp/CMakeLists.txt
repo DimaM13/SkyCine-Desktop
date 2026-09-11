@@ -13,7 +13,7 @@ add_library(fastwarp SHARED
 )
 
 target_include_directories(fastwarp PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../bin/vapoursynth/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${Vulkan_INCLUDE_DIRS}
 )
 
