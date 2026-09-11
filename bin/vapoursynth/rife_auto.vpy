@@ -9,9 +9,44 @@ core = vs.core
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 plugin_path = os.path.join(base_dir, "librife_windows_x86-64.dll")
-model_path = os.path.join(base_dir, "models", "rife-v4.6_ensembleFalse")
+fastwarp_path = os.path.join(base_dir, "librife_fastwarp.dll")
+
+def ensure_flow_mask_model(base_dir):
+    flow_dir = os.path.join(base_dir, "models", "rife-v4.6_flow_mask")
+    param_path = os.path.join(flow_dir, "flownet.param")
+    bin_path = os.path.join(flow_dir, "flownet.bin")
+    if os.path.isfile(param_path) and os.path.isfile(bin_path):
+        return flow_dir
+    src_dir = os.path.join(base_dir, "models", "rife-v4.6_ensembleFalse")
+    src_param = os.path.join(src_dir, "flownet.param")
+    src_bin = os.path.join(src_dir, "flownet.bin")
+    if not (os.path.isfile(src_param) and os.path.isfile(src_bin)):
+        return src_dir
+    try:
+        import shutil
+        os.makedirs(flow_dir, exist_ok=True)
+        shutil.copyfile(src_bin, bin_path)
+        with open(src_param, "r", encoding="utf-8") as f:
+            orig = [l.strip() for l in f if l.strip()]
+        new_lines = [orig[0], "295 357"] + orig[2:296] + ["Concat                   Concat_out               2 1 498 506 out0 0=0"]
+        with open(param_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(new_lines) + "\n")
+        return flow_dir
+    except Exception:
+        return src_dir
 
 core.std.LoadPlugin(plugin_path)
+has_fastwarp = False
+if os.path.isfile(fastwarp_path):
+    try:
+        core.std.LoadPlugin(fastwarp_path)
+        has_fastwarp = hasattr(core, "fastwarp")
+    except Exception:
+        has_fastwarp = False
+
+flow_model_path = ensure_flow_mask_model(base_dir)
+use_warp = has_fastwarp and os.path.isdir(flow_model_path)
+model_path = flow_model_path if use_warp else standard_model_path
 
 clip = video_in
 
@@ -152,18 +187,30 @@ else:
         gpu_thread=2
     )
 
-    # 9. Interleave preserving 100% native untouched original frames!
-    if factor == 3:
-        gen1 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=1)
-        gen2 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=2)
-        gen1_native = core.resize.Bicubic(gen1, width=base_w, height=base_h, format=base_clip.format, matrix_s="709")
-        gen2_native = core.resize.Bicubic(gen2, width=base_w, height=base_h, format=base_clip.format, matrix_s="709")
-        # Every 3rd frame is 100% native untouched 1080p!
-        out = core.std.Interleave([base_clip, gen1_native, gen2_native])
+    # 9. Hardware-accelerated Warp or Bicubic synthesis & interleaving
+    if use_warp:
+        clip0 = base_clip[:-1]
+        clip1 = base_clip[1:]
+        if factor == 3:
+            flow1 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=1)
+            flow2 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=2)
+            gen1_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow1)
+            gen2_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow2)
+            out = core.std.Interleave([clip0, gen1_native, gen2_native]) + base_clip[-1]
+        else:
+            odd_flow = core.std.SelectEvery(interpolated_rgb, cycle=2, offsets=1)
+            gen_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=odd_flow)
+            out = core.std.Interleave([clip0, gen_native]) + base_clip[-1]
     else:
-        gen_odd = core.std.SelectEvery(interpolated_rgb, cycle=2, offsets=1)
-        gen_native = core.resize.Bicubic(gen_odd, width=base_w, height=base_h, format=base_clip.format, matrix_s="709")
-        # Every 2nd frame is 100% native untouched 1080p!
-        out = core.std.Interleave([base_clip, gen_native])
+        if factor == 3:
+            gen1 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=1)
+            gen2 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=2)
+            gen1_native = core.resize.Bicubic(gen1, width=base_w, height=base_h, format=base_clip.format, matrix_s="709")
+            gen2_native = core.resize.Bicubic(gen2, width=base_w, height=base_h, format=base_clip.format, matrix_s="709")
+            out = core.std.Interleave([base_clip, gen1_native, gen2_native])
+        else:
+            gen_odd = core.std.SelectEvery(interpolated_rgb, cycle=2, offsets=1)
+            gen_native = core.resize.Bicubic(gen_odd, width=base_w, height=base_h, format=base_clip.format, matrix_s="709")
+            out = core.std.Interleave([base_clip, gen_native])
 
     out.set_output()
