@@ -28,7 +28,7 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
         const VSFrame* flow = vsapi->getFrameFilter(n, d->nodeFlow, frameCtx);
         const VSFrame* mask = vsapi->getFrameFilter(n, d->nodeMask, frameCtx);
 
-        VSFrame* dst = vsapi->newVideoFrame(d->vi->format, d->vi->width, d->vi->height, src0, core);
+        VSFrame* dst = vsapi->newVideoFrame(&d->vi->format, d->vi->width, d->vi->height, src0, core);
 
         int width = d->vi->width;
         int height = d->vi->height;
