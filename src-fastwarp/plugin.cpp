@@ -120,7 +120,7 @@ static void VS_CC fastwarpCreate(const VSMap* in, VSMap* out, void* userData, VS
     float time_step = (float)vsapi->mapGetFloat(in, "time_step", 0, &err);
     if (err) time_step = 0.5f;
 
-    int gpu_id = int64ToIntS(vsapi->mapGetInt(in, "gpu_id", 0, &err));
+    int gpu_id = static_cast<int>(vsapi->mapGetInt(in, "gpu_id", 0, &err));
     if (err) gpu_id = 0;
 
     const VSVideoInfo* vi_src = vsapi->getVideoInfo(node0);
