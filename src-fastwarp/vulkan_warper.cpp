@@ -319,12 +319,12 @@ bool VulkanWarper::init(int gpu_id, int width, int height, int flow_w, int flow_
     vkDestroyShaderModule(device, shaderModule, nullptr);
     if (pipeRes != VK_SUCCESS) return false;
 
-    // Descriptor Pool (allocated for 3 descriptor sets: Y, U, V)
+    // Descriptor Pool
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 9; // 3 sets * 3 samplers
+    poolSizes[0].descriptorCount = 9;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[1].descriptorCount = 3; // 3 sets * 1 image
+    poolSizes[1].descriptorCount = 3;
 
     VkDescriptorPoolCreateInfo descPoolInfo{};
     descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -377,7 +377,6 @@ bool VulkanWarper::init(int gpu_id, int width, int height, int flow_w, int flow_
     if (!createImage(flow_w, flow_h, VK_FORMAT_R32G32B32A32_SFLOAT, srcUsage, flowImg, flow_mem)) return false;
     flow_view = createImageView(flowImg, VK_FORMAT_R32G32B32A32_SFLOAT);
 
-    // Helper to update descriptor set for plane
     auto setupDescSet = [this](VkDescriptorSet dSet, VkImageView v0, VkImageView v1, VkImageView vOut) {
         VkDescriptorImageInfo imageInfos[4]{};
         imageInfos[0].sampler = linearSampler;
@@ -411,7 +410,6 @@ bool VulkanWarper::init(int gpu_id, int width, int height, int flow_w, int flow_
     setupDescSet(descSetU, img0_u_view, img1_u_view, out_u_view);
     setupDescSet(descSetV, img0_v_view, img1_v_view, out_v_view);
 
-    // Single unified staging buffers for zero-allocation DMA transfer
     size_t frame_bytes = (size_t)width * height + 2 * ((size_t)m_uv_w * m_uv_h);
     uploadSize = (VkDeviceSize)frame_bytes * 2 + (VkDeviceSize)flow_w * flow_h * 4 * sizeof(float);
     downloadSize = (VkDeviceSize)frame_bytes;
@@ -427,11 +425,10 @@ bool VulkanWarper::init(int gpu_id, int width, int height, int flow_w, int flow_
 }
 
 bool VulkanWarper::warp_frame_yuv420(
-    const uint8_t* s0_y, const uint8_t* s1_y, uint8_t* dst_y, int w, int h, ptrdiff_t s_stride_y, ptrdiff_t d_stride_y,
-    const uint8_t* s0_u, const uint8_t* s1_u, uint8_t* dst_u, int uv_w, int uv_h, ptrdiff_t s_stride_u, ptrdiff_t d_stride_u,
-    const uint8_t* s0_v, const uint8_t* s1_v, uint8_t* dst_v, ptrdiff_t s_stride_v, ptrdiff_t d_stride_v,
-    const float* flow_p0, const float* flow_p1, const float* flow_p2,
-    int flow_w, int flow_h, ptrdiff_t flow_stride,
+    const PlaneInfo& y,
+    const PlaneInfo& u,
+    const PlaneInfo& v,
+    const FlowInfo& flow,
     float time_step
 ) {
     if (!device || !stagingUploadMapped || !stagingDownloadMapped) return false;
@@ -439,47 +436,47 @@ bool VulkanWarper::warp_frame_yuv420(
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &fence);
 
-    size_t y_bytes = (size_t)w * h;
-    size_t uv_bytes = (size_t)uv_w * uv_h;
+    size_t y_bytes = (size_t)y.w * y.h;
+    size_t uv_bytes = (size_t)u.w * u.h;
     size_t frame_bytes = y_bytes + 2 * uv_bytes;
 
     uint8_t* up = static_cast<uint8_t*>(stagingUploadMapped);
 
-    // 1. Pack Frame 0 (Y, U, V)
     auto copyPlane = [](uint8_t* dst, const uint8_t* src, int pw, int ph, ptrdiff_t stride) {
         if (stride == pw) {
             std::memcpy(dst, src, (size_t)pw * ph);
         } else {
-            for (int y = 0; y < ph; y++) {
-                std::memcpy(dst + (size_t)y * pw, src + y * stride, pw);
+            for (int r = 0; r < ph; r++) {
+                std::memcpy(dst + (size_t)r * pw, src + r * stride, pw);
             }
         }
     };
 
-    copyPlane(up, s0_y, w, h, s_stride_y);
-    copyPlane(up + y_bytes, s0_u, uv_w, uv_h, s_stride_u);
-    copyPlane(up + y_bytes + uv_bytes, s0_v, uv_w, uv_h, s_stride_v);
+    // 1. Pack Frame 0
+    copyPlane(up, y.s0, y.w, y.h, y.s_stride);
+    copyPlane(up + y_bytes, u.s0, u.w, u.h, u.s_stride);
+    copyPlane(up + y_bytes + uv_bytes, v.s0, v.w, v.h, v.s_stride);
 
-    // 2. Pack Frame 1 (Y, U, V)
+    // 2. Pack Frame 1
     uint8_t* up1 = up + frame_bytes;
-    copyPlane(up1, s1_y, w, h, s_stride_y);
-    copyPlane(up1 + y_bytes, s1_u, uv_w, uv_h, s_stride_u);
-    copyPlane(up1 + y_bytes + uv_bytes, s1_v, uv_w, uv_h, s_stride_v);
+    copyPlane(up1, y.s1, y.w, y.h, y.s_stride);
+    copyPlane(up1 + y_bytes, u.s1, u.w, u.h, u.s_stride);
+    copyPlane(up1 + y_bytes + uv_bytes, v.s1, v.w, v.h, v.s_stride);
 
-    // 3. Pack Flow (RGBA32F) exactly ONCE
+    // 3. Pack Flow
     float* upload_flow = reinterpret_cast<float*>(up1 + frame_bytes);
     #pragma omp parallel for schedule(static)
-    for (int y = 0; y < flow_h; y++) {
-        const float* r0 = flow_p0 + y * flow_stride;
-        const float* r1 = flow_p1 + y * flow_stride;
-        const float* r2 = flow_p2 ? (flow_p2 + y * flow_stride) : nullptr;
-        float* dst_row = upload_flow + (size_t)y * flow_w * 4;
+    for (int r = 0; r < flow.h; r++) {
+        const float* r0 = flow.p0 + r * flow.stride;
+        const float* r1 = flow.p1 + r * flow.stride;
+        const float* r2 = flow.p2 ? (flow.p2 + r * flow.stride) : nullptr;
+        float* dst_row = upload_flow + (size_t)r * flow.w * 4;
 
-        for (int x = 0; x < flow_w; x++) {
-            dst_row[x * 4 + 0] = r0[x];
-            dst_row[x * 4 + 1] = r1[x];
-            dst_row[x * 4 + 2] = r2 ? r2[x] : 0.5f;
-            dst_row[x * 4 + 3] = 1.0f;
+        for (int c = 0; c < flow.w; c++) {
+            dst_row[c * 4 + 0] = r0[c];
+            dst_row[c * 4 + 1] = r1[c];
+            dst_row[c * 4 + 2] = r2 ? r2[c] : 0.5f;
+            dst_row[c * 4 + 3] = 1.0f;
         }
     }
 
@@ -489,7 +486,6 @@ bool VulkanWarper::warp_frame_yuv420(
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmdBuffer, &beginInfo);
 
-    // Barrier: Transition all input images to TRANSFER_DST
     VkImage inImages[7] = { img0_y, img0_u, img0_v, img1_y, img1_u, img1_v, flowImg };
     VkImageMemoryBarrier barriers[7]{};
     for (int i = 0; i < 7; i++) {
@@ -505,7 +501,6 @@ bool VulkanWarper::warp_frame_yuv420(
     }
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 7, barriers);
 
-    // Batch Copy Staging -> Textures
     auto copyToImg = [this](VkDeviceSize offset, VkImage img, uint32_t pw, uint32_t ph) {
         VkBufferImageCopy copyRegion{};
         copyRegion.bufferOffset = offset;
@@ -515,17 +510,16 @@ bool VulkanWarper::warp_frame_yuv420(
         vkCmdCopyBufferToImage(cmdBuffer, stagingUpload, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
     };
 
-    copyToImg(0, img0_y, w, h);
-    copyToImg(y_bytes, img0_u, uv_w, uv_h);
-    copyToImg(y_bytes + uv_bytes, img0_v, uv_w, uv_h);
+    copyToImg(0, img0_y, y.w, y.h);
+    copyToImg(y_bytes, img0_u, u.w, u.h);
+    copyToImg(y_bytes + uv_bytes, img0_v, v.w, v.h);
 
-    copyToImg(frame_bytes, img1_y, w, h);
-    copyToImg(frame_bytes + y_bytes, img1_u, uv_w, uv_h);
-    copyToImg(frame_bytes + y_bytes + uv_bytes, img1_v, uv_w, uv_h);
+    copyToImg(frame_bytes, img1_y, y.w, y.h);
+    copyToImg(frame_bytes + y_bytes, img1_u, u.w, u.h);
+    copyToImg(frame_bytes + y_bytes + uv_bytes, img1_v, v.w, v.h);
 
-    copyToImg(frame_bytes * 2, flowImg, flow_w, flow_h);
+    copyToImg(frame_bytes * 2, flowImg, flow.w, flow.h);
 
-    // Barrier: Transition to Compute Read / Write
     VkImageMemoryBarrier computeBarriers[10]{};
     for (int i = 0; i < 7; i++) {
         computeBarriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -553,24 +547,23 @@ bool VulkanWarper::warp_frame_yuv420(
     }
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 10, computeBarriers);
 
-    // Bind Pipeline
     vkCmdBindPipeline(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
     // Dispatch Y Plane
     vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descSetY, 0, nullptr);
-    PushConstants pcY{ (float)w, (float)h, (float)flow_w, (float)flow_h, time_step, 0.0f };
+    PushConstants pcY{ (float)y.w, (float)y.h, (float)flow.w, (float)flow.h, time_step, 0.0f };
     vkCmdPushConstants(cmdBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pcY);
-    vkCmdDispatch(cmdBuffer, (w + 15) / 16, (h + 15) / 16, 1);
+    vkCmdDispatch(cmdBuffer, (y.w + 15) / 16, (y.h + 15) / 16, 1);
 
     // Dispatch U Plane
     vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descSetU, 0, nullptr);
-    PushConstants pcUV{ (float)uv_w, (float)uv_h, (float)flow_w, (float)flow_h, time_step, 0.0f };
+    PushConstants pcUV{ (float)u.w, (float)u.h, (float)flow.w, (float)flow.h, time_step, 0.0f };
     vkCmdPushConstants(cmdBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pcUV);
-    vkCmdDispatch(cmdBuffer, (uv_w + 15) / 16, (uv_h + 15) / 16, 1);
+    vkCmdDispatch(cmdBuffer, (u.w + 15) / 16, (u.h + 15) / 16, 1);
 
     // Dispatch V Plane
     vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descSetV, 0, nullptr);
-    vkCmdDispatch(cmdBuffer, (uv_w + 15) / 16, (uv_h + 15) / 16, 1);
+    vkCmdDispatch(cmdBuffer, (v.w + 15) / 16, (v.h + 15) / 16, 1);
 
     // Barrier: outImages GENERAL -> TRANSFER_SRC
     VkImageMemoryBarrier readBarriers[3]{};
@@ -587,7 +580,6 @@ bool VulkanWarper::warp_frame_yuv420(
     }
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 3, readBarriers);
 
-    // Copy outImages to Staging Download Buffer
     auto copyFromImg = [this](VkDeviceSize offset, VkImage img, uint32_t pw, uint32_t ph) {
         VkBufferImageCopy downloadCopy{};
         downloadCopy.bufferOffset = offset;
@@ -597,13 +589,12 @@ bool VulkanWarper::warp_frame_yuv420(
         vkCmdCopyImageToBuffer(cmdBuffer, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingDownload, 1, &downloadCopy);
     };
 
-    copyFromImg(0, out_y, w, h);
-    copyFromImg(y_bytes, out_u, uv_w, uv_h);
-    copyFromImg(y_bytes + uv_bytes, out_v, uv_w, uv_h);
+    copyFromImg(0, out_y, y.w, y.h);
+    copyFromImg(y_bytes, out_u, u.w, u.h);
+    copyFromImg(y_bytes + uv_bytes, out_v, v.w, v.h);
 
     vkEndCommandBuffer(cmdBuffer);
 
-    // Single Submission to GPU!
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
@@ -611,25 +602,13 @@ bool VulkanWarper::warp_frame_yuv420(
 
     if (vkQueueSubmit(computeQueue, 1, &submitInfo, fence) != VK_SUCCESS) return false;
 
-    // Single synchronization point!
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
 
-    // Copy readback into output frame planes
     const uint8_t* dl = static_cast<const uint8_t*>(stagingDownloadMapped);
 
-    auto readPlane = [](uint8_t* dst, const uint8_t* src, int pw, int ph, ptrdiff_t stride) {
-        if (stride == pw) {
-            std::memcpy(dst, src, (size_t)pw * ph);
-        } else {
-            for (int y = 0; y < ph; y++) {
-                std::memcpy(dst + y * stride, src + (size_t)y * pw, pw);
-            }
-        }
-    };
-
-    readPlane(dst_y, dl, w, h, d_stride_y);
-    readPlane(dst_u, dl + y_bytes, uv_w, uv_h, d_stride_u);
-    readPlane(dst_v, dl + y_bytes + uv_bytes, uv_w, uv_h, d_stride_v);
+    copyPlane(y.dst, dl, y.w, y.h, y.d_stride);
+    copyPlane(u.dst, dl + y_bytes, u.w, u.h, u.d_stride);
+    copyPlane(v.dst, dl + y_bytes + uv_bytes, v.w, v.h, v.d_stride);
 
     return true;
 }

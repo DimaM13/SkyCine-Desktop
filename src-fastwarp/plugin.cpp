@@ -52,26 +52,24 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
         int uv_w = vsapi->getFrameWidth(src0, 1);
         int uv_h = vsapi->getFrameHeight(src0, 1);
 
-        const uint8_t* s0_y = vsapi->getReadPtr(src0, 0);
-        const uint8_t* s1_y = vsapi->getReadPtr(src1, 0);
-        uint8_t* dst_y = vsapi->getWritePtr(dst, 0);
-
-        const uint8_t* s0_u = vsapi->getReadPtr(src0, 1);
-        const uint8_t* s1_u = vsapi->getReadPtr(src1, 1);
-        uint8_t* dst_u = vsapi->getWritePtr(dst, 1);
-
-        const uint8_t* s0_v = vsapi->getReadPtr(src0, 2);
-        const uint8_t* s1_v = vsapi->getReadPtr(src1, 2);
-        uint8_t* dst_v = vsapi->getWritePtr(dst, 2);
-
-        bool ok = d->warper->warp_frame_yuv420(
-            s0_y, s1_y, dst_y, w, h, vsapi->getStride(src0, 0), vsapi->getStride(dst, 0),
-            s0_u, s1_u, dst_u, uv_w, uv_h, vsapi->getStride(src0, 1), vsapi->getStride(dst, 1),
-            s0_v, s1_v, dst_v, uv_w, uv_h, vsapi->getStride(src0, 2), vsapi->getStride(dst, 2),
+        PlaneInfo planeY{
+            vsapi->getReadPtr(src0, 0), vsapi->getReadPtr(src1, 0), vsapi->getWritePtr(dst, 0),
+            w, h, vsapi->getStride(src0, 0), vsapi->getStride(dst, 0)
+        };
+        PlaneInfo planeU{
+            vsapi->getReadPtr(src0, 1), vsapi->getReadPtr(src1, 1), vsapi->getWritePtr(dst, 1),
+            uv_w, uv_h, vsapi->getStride(src0, 1), vsapi->getStride(dst, 1)
+        };
+        PlaneInfo planeV{
+            vsapi->getReadPtr(src0, 2), vsapi->getReadPtr(src1, 2), vsapi->getWritePtr(dst, 2),
+            uv_w, uv_h, vsapi->getStride(src0, 2), vsapi->getStride(dst, 2)
+        };
+        FlowInfo flowInfo{
             flow_p0, flow_p1, flow_p2,
-            flow_w, flow_h, flow_stride,
-            d->time_step
-        );
+            flow_w, flow_h, flow_stride
+        };
+
+        bool ok = d->warper->warp_frame_yuv420(planeY, planeU, planeV, flowInfo, d->time_step);
 
         if (!ok) {
             vsapi->setFilterError("FastWarp: Vulkan GPU execution failed during frame dispatch", frameCtx);

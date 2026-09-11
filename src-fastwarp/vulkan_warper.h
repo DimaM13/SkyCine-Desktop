@@ -5,6 +5,25 @@
 #include <cstdint>
 #include <cstddef>
 
+struct PlaneInfo {
+    const uint8_t* s0;
+    const uint8_t* s1;
+    uint8_t* dst;
+    int w;
+    int h;
+    ptrdiff_t s_stride;
+    ptrdiff_t d_stride;
+};
+
+struct FlowInfo {
+    const float* p0;
+    const float* p1;
+    const float* p2;
+    int w;
+    int h;
+    ptrdiff_t stride;
+};
+
 class VulkanWarper {
 public:
     VulkanWarper();
@@ -14,11 +33,10 @@ public:
     void cleanup();
 
     bool warp_frame_yuv420(
-        const uint8_t* s0_y, const uint8_t* s1_y, uint8_t* dst_y, int w, int h, ptrdiff_t s_stride_y, ptrdiff_t d_stride_y,
-        const uint8_t* s0_u, const uint8_t* s1_u, uint8_t* dst_u, int uv_w, int uv_h, ptrdiff_t s_stride_u, ptrdiff_t d_stride_u,
-        const uint8_t* s0_v, const uint8_t* s1_v, uint8_t* dst_v, ptrdiff_t s_stride_v, ptrdiff_t d_stride_v,
-        const float* flow_p0, const float* flow_p1, const float* flow_p2,
-        int flow_w, int flow_h, ptrdiff_t flow_stride,
+        const PlaneInfo& y,
+        const PlaneInfo& u,
+        const PlaneInfo& v,
+        const FlowInfo& flow,
         float time_step
     );
 
@@ -69,7 +87,7 @@ private:
     // Flow Texture
     VkImage flowImg = VK_NULL_HANDLE; VkDeviceMemory flow_mem = VK_NULL_HANDLE; VkImageView flow_view = VK_NULL_HANDLE;
 
-    // Single unified staging buffers for DMA transfers
+    // Unified Staging Buffers
     VkDeviceSize uploadSize = 0;
     VkBuffer stagingUpload = VK_NULL_HANDLE;
     VkDeviceMemory stagingUploadMem = VK_NULL_HANDLE;
