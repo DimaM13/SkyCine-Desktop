@@ -6,6 +6,7 @@
 #include <VapourSynth4.h>
 #include <VSHelper4.h>
 #include <memory>
+#include <vector>
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
@@ -17,6 +18,22 @@ struct FastWarpData {
     const VSVideoInfo* vi;
 };
 
+struct XMap {
+    int fx0;
+    int fx1;
+    float wx0;
+    float wx1;
+};
+
+struct YMap {
+    int fy0;
+    int fy1;
+    float wy0;
+    float wy1;
+    ptrdiff_t row0;
+    ptrdiff_t row1;
+};
+
 static inline void warp_plane_uint8(
     const uint8_t* src0, const uint8_t* src1, uint8_t* dst,
     int pw, int ph, ptrdiff_t s_stride, ptrdiff_t d_stride,
@@ -26,7 +43,23 @@ static inline void warp_plane_uint8(
     const float scale_x = (float)pw / (float)flow_w;
     const float scale_y = (float)ph / (float)flow_h;
 
-    #pragma omp parallel for schedule(static)
+    // Precompute X and Y mappings (L1 cache friendly)
+    std::vector<XMap> xmap(pw);
+    for (int x = 0; x < pw; x++) {
+        float norm_x = ((float)x + 0.5f) / (float)pw;
+        if (norm_x < 0.0f) norm_x = 0.0f;
+        if (norm_x > 1.0f) norm_x = 1.0f;
+        float fx_f = norm_x * (float)(flow_w - 1);
+        int fx0 = (int)fx_f;
+        if (fx0 > flow_w - 2) fx0 = flow_w - 2;
+        xmap[x].fx0 = fx0;
+        xmap[x].fx1 = fx0 + 1;
+        float wx1 = fx_f - (float)fx0;
+        xmap[x].wx1 = wx1;
+        xmap[x].wx0 = 1.0f - wx1;
+    }
+
+    std::vector<YMap> ymap(ph);
     for (int y = 0; y < ph; y++) {
         float norm_y = ((float)y + 0.5f) / (float)ph;
         if (norm_y < 0.0f) norm_y = 0.0f;
@@ -34,34 +67,48 @@ static inline void warp_plane_uint8(
         float fy_f = norm_y * (float)(flow_h - 1);
         int fy0 = (int)fy_f;
         if (fy0 > flow_h - 2) fy0 = flow_h - 2;
-        int fy1 = fy0 + 1;
+        ymap[y].fy0 = fy0;
+        ymap[y].fy1 = fy0 + 1;
         float wy1 = fy_f - (float)fy0;
-        float wy0 = 1.0f - wy1;
+        ymap[y].wy1 = wy1;
+        ymap[y].wy0 = 1.0f - wy1;
+        ymap[y].row0 = (ptrdiff_t)fy0 * flow_stride;
+        ymap[y].row1 = (ptrdiff_t)(fy0 + 1) * flow_stride;
+    }
+
+    const float max_x = (float)(pw - 1);
+    const float max_y = (float)(ph - 1);
+    const int max_ix = pw - 2;
+    const int max_iy = ph - 2;
+
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < ph; y++) {
+        const auto& ym = ymap[y];
+        const ptrdiff_t r0 = ym.row0;
+        const ptrdiff_t r1 = ym.row1;
+        const float wy0 = ym.wy0;
+        const float wy1 = ym.wy1;
 
         uint8_t* out_row = dst + y * d_stride;
 
         for (int x = 0; x < pw; x++) {
-            float norm_x = ((float)x + 0.5f) / (float)pw;
-            if (norm_x < 0.0f) norm_x = 0.0f;
-            if (norm_x > 1.0f) norm_x = 1.0f;
-            float fx_f = norm_x * (float)(flow_w - 1);
-            int fx0 = (int)fx_f;
-            if (fx0 > flow_w - 2) fx0 = flow_w - 2;
-            int fx1 = fx0 + 1;
-            float wx1 = fx_f - (float)fx0;
-            float wx0 = 1.0f - wx1;
+            const auto& xm = xmap[x];
+            const int fx0 = xm.fx0;
+            const int fx1 = xm.fx1;
+            const float wx0 = xm.wx0;
+            const float wx1 = xm.wx1;
 
-            ptrdiff_t idx00 = (ptrdiff_t)fy0 * flow_stride + fx0;
-            ptrdiff_t idx01 = (ptrdiff_t)fy0 * flow_stride + fx1;
-            ptrdiff_t idx10 = (ptrdiff_t)fy1 * flow_stride + fx0;
-            ptrdiff_t idx11 = (ptrdiff_t)fy1 * flow_stride + fx1;
+            const ptrdiff_t i00 = r0 + fx0;
+            const ptrdiff_t i01 = r0 + fx1;
+            const ptrdiff_t i10 = r1 + fx0;
+            const ptrdiff_t i11 = r1 + fx1;
 
-            float dx = (flow_p0[idx00] * wx0 + flow_p0[idx01] * wx1) * wy0 +
-                       (flow_p0[idx10] * wx0 + flow_p0[idx11] * wx1) * wy1;
-            float dy = (flow_p1[idx00] * wx0 + flow_p1[idx01] * wx1) * wy0 +
-                       (flow_p1[idx10] * wx0 + flow_p1[idx11] * wx1) * wy1;
-            float mask = flow_p2 ? ((flow_p2[idx00] * wx0 + flow_p2[idx01] * wx1) * wy0 +
-                                   (flow_p2[idx10] * wx0 + flow_p2[idx11] * wx1) * wy1) : 0.5f;
+            float dx = (flow_p0[i00] * wx0 + flow_p0[i01] * wx1) * wy0 +
+                       (flow_p0[i10] * wx0 + flow_p0[i11] * wx1) * wy1;
+            float dy = (flow_p1[i00] * wx0 + flow_p1[i01] * wx1) * wy0 +
+                       (flow_p1[i10] * wx0 + flow_p1[i11] * wx1) * wy1;
+            float mask = flow_p2 ? ((flow_p2[i00] * wx0 + flow_p2[i01] * wx1) * wy0 +
+                                   (flow_p2[i10] * wx0 + flow_p2[i11] * wx1) * wy1) : 0.5f;
 
             float sx0 = (float)x + dx * scale_x;
             float sy0 = (float)y + dy * scale_y;
@@ -69,14 +116,14 @@ static inline void warp_plane_uint8(
             float sy1 = (float)y - dy * scale_y;
 
             if (sx0 < 0.0f) sx0 = 0.0f;
-            if (sx0 > (float)(pw - 1)) sx0 = (float)(pw - 1);
+            if (sx0 > max_x) sx0 = max_x;
             if (sy0 < 0.0f) sy0 = 0.0f;
-            if (sy0 > (float)(ph - 1)) sy0 = (float)(ph - 1);
+            if (sy0 > max_y) sy0 = max_y;
 
             int ix0 = (int)sx0;
-            if (ix0 > pw - 2) ix0 = pw - 2;
+            if (ix0 > max_ix) ix0 = max_ix;
             int iy0 = (int)sy0;
-            if (iy0 > ph - 2) iy0 = ph - 2;
+            if (iy0 > max_iy) iy0 = max_iy;
             float qx1 = sx0 - (float)ix0; float qx0 = 1.0f - qx1;
             float qy1 = sy0 - (float)iy0; float qy0 = 1.0f - qy1;
 
@@ -85,14 +132,14 @@ static inline void warp_plane_uint8(
                        ((float)p0[s_stride] * qx0 + (float)p0[s_stride + 1] * qx1) * qy1;
 
             if (sx1 < 0.0f) sx1 = 0.0f;
-            if (sx1 > (float)(pw - 1)) sx1 = (float)(pw - 1);
+            if (sx1 > max_x) sx1 = max_x;
             if (sy1 < 0.0f) sy1 = 0.0f;
-            if (sy1 > (float)(ph - 1)) sy1 = (float)(ph - 1);
+            if (sy1 > max_y) sy1 = max_y;
 
             int ix1 = (int)sx1;
-            if (ix1 > pw - 2) ix1 = pw - 2;
+            if (ix1 > max_ix) ix1 = max_ix;
             int iy1 = (int)sy1;
-            if (iy1 > ph - 2) iy1 = ph - 2;
+            if (iy1 > max_iy) iy1 = max_iy;
             float rx1 = sx1 - (float)ix1; float rx0 = 1.0f - rx1;
             float ry1 = sy1 - (float)iy1; float ry0 = 1.0f - ry1;
 
@@ -120,7 +167,22 @@ static inline void warp_plane_float(
     const float scale_x = (float)pw / (float)flow_w;
     const float scale_y = (float)ph / (float)flow_h;
 
-    #pragma omp parallel for schedule(static)
+    std::vector<XMap> xmap(pw);
+    for (int x = 0; x < pw; x++) {
+        float norm_x = ((float)x + 0.5f) / (float)pw;
+        if (norm_x < 0.0f) norm_x = 0.0f;
+        if (norm_x > 1.0f) norm_x = 1.0f;
+        float fx_f = norm_x * (float)(flow_w - 1);
+        int fx0 = (int)fx_f;
+        if (fx0 > flow_w - 2) fx0 = flow_w - 2;
+        xmap[x].fx0 = fx0;
+        xmap[x].fx1 = fx0 + 1;
+        float wx1 = fx_f - (float)fx0;
+        xmap[x].wx1 = wx1;
+        xmap[x].wx0 = 1.0f - wx1;
+    }
+
+    std::vector<YMap> ymap(ph);
     for (int y = 0; y < ph; y++) {
         float norm_y = ((float)y + 0.5f) / (float)ph;
         if (norm_y < 0.0f) norm_y = 0.0f;
@@ -128,34 +190,48 @@ static inline void warp_plane_float(
         float fy_f = norm_y * (float)(flow_h - 1);
         int fy0 = (int)fy_f;
         if (fy0 > flow_h - 2) fy0 = flow_h - 2;
-        int fy1 = fy0 + 1;
+        ymap[y].fy0 = fy0;
+        ymap[y].fy1 = fy0 + 1;
         float wy1 = fy_f - (float)fy0;
-        float wy0 = 1.0f - wy1;
+        ymap[y].wy1 = wy1;
+        ymap[y].wy0 = 1.0f - wy1;
+        ymap[y].row0 = (ptrdiff_t)fy0 * flow_stride;
+        ymap[y].row1 = (ptrdiff_t)(fy0 + 1) * flow_stride;
+    }
+
+    const float max_x = (float)(pw - 1);
+    const float max_y = (float)(ph - 1);
+    const int max_ix = pw - 2;
+    const int max_iy = ph - 2;
+
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < ph; y++) {
+        const auto& ym = ymap[y];
+        const ptrdiff_t r0 = ym.row0;
+        const ptrdiff_t r1 = ym.row1;
+        const float wy0 = ym.wy0;
+        const float wy1 = ym.wy1;
 
         float* out_row = dst + y * d_stride;
 
         for (int x = 0; x < pw; x++) {
-            float norm_x = ((float)x + 0.5f) / (float)pw;
-            if (norm_x < 0.0f) norm_x = 0.0f;
-            if (norm_x > 1.0f) norm_x = 1.0f;
-            float fx_f = norm_x * (float)(flow_w - 1);
-            int fx0 = (int)fx_f;
-            if (fx0 > flow_w - 2) fx0 = flow_w - 2;
-            int fx1 = fx0 + 1;
-            float wx1 = fx_f - (float)fx0;
-            float wx0 = 1.0f - wx1;
+            const auto& xm = xmap[x];
+            const int fx0 = xm.fx0;
+            const int fx1 = xm.fx1;
+            const float wx0 = xm.wx0;
+            const float wx1 = xm.wx1;
 
-            ptrdiff_t idx00 = (ptrdiff_t)fy0 * flow_stride + fx0;
-            ptrdiff_t idx01 = (ptrdiff_t)fy0 * flow_stride + fx1;
-            ptrdiff_t idx10 = (ptrdiff_t)fy1 * flow_stride + fx0;
-            ptrdiff_t idx11 = (ptrdiff_t)fy1 * flow_stride + fx1;
+            const ptrdiff_t i00 = r0 + fx0;
+            const ptrdiff_t i01 = r0 + fx1;
+            const ptrdiff_t i10 = r1 + fx0;
+            const ptrdiff_t i11 = r1 + fx1;
 
-            float dx = (flow_p0[idx00] * wx0 + flow_p0[idx01] * wx1) * wy0 +
-                       (flow_p0[idx10] * wx0 + flow_p0[idx11] * wx1) * wy1;
-            float dy = (flow_p1[idx00] * wx0 + flow_p1[idx01] * wx1) * wy0 +
-                       (flow_p1[idx10] * wx0 + flow_p1[idx11] * wx1) * wy1;
-            float mask = flow_p2 ? ((flow_p2[idx00] * wx0 + flow_p2[idx01] * wx1) * wy0 +
-                                   (flow_p2[idx10] * wx0 + flow_p2[idx11] * wx1) * wy0) : 0.5f;
+            float dx = (flow_p0[i00] * wx0 + flow_p0[i01] * wx1) * wy0 +
+                       (flow_p0[i10] * wx0 + flow_p0[i11] * wx1) * wy1;
+            float dy = (flow_p1[i00] * wx0 + flow_p1[i01] * wx1) * wy0 +
+                       (flow_p1[i10] * wx0 + flow_p1[i11] * wx1) * wy1;
+            float mask = flow_p2 ? ((flow_p2[i00] * wx0 + flow_p2[i01] * wx1) * wy0 +
+                                   (flow_p2[i10] * wx0 + flow_p2[i11] * wx1) * wy0) : 0.5f;
 
             float sx0 = (float)x + dx * scale_x;
             float sy0 = (float)y + dy * scale_y;
@@ -163,14 +239,14 @@ static inline void warp_plane_float(
             float sy1 = (float)y - dy * scale_y;
 
             if (sx0 < 0.0f) sx0 = 0.0f;
-            if (sx0 > (float)(pw - 1)) sx0 = (float)(pw - 1);
+            if (sx0 > max_x) sx0 = max_x;
             if (sy0 < 0.0f) sy0 = 0.0f;
-            if (sy0 > (float)(ph - 1)) sy0 = (float)(ph - 1);
+            if (sy0 > max_y) sy0 = max_y;
 
             int ix0 = (int)sx0;
-            if (ix0 > pw - 2) ix0 = pw - 2;
+            if (ix0 > max_ix) ix0 = max_ix;
             int iy0 = (int)sy0;
-            if (iy0 > ph - 2) iy0 = ph - 2;
+            if (iy0 > max_iy) iy0 = max_iy;
             float qx1 = sx0 - (float)ix0; float qx0 = 1.0f - qx1;
             float qy1 = sy0 - (float)iy0; float qy0 = 1.0f - qy1;
 
@@ -179,14 +255,14 @@ static inline void warp_plane_float(
                        (p0[s_stride] * qx0 + p0[s_stride + 1] * qx1) * qy1;
 
             if (sx1 < 0.0f) sx1 = 0.0f;
-            if (sx1 > (float)(pw - 1)) sx1 = (float)(pw - 1);
+            if (sx1 > max_x) sx1 = max_x;
             if (sy1 < 0.0f) sy1 = 0.0f;
-            if (sy1 > (float)(ph - 1)) sy1 = (float)(ph - 1);
+            if (sy1 > max_y) sy1 = max_y;
 
             int ix1 = (int)sx1;
-            if (ix1 > pw - 2) ix1 = pw - 2;
+            if (ix1 > max_ix) ix1 = max_ix;
             int iy1 = (int)sy1;
-            if (iy1 > ph - 2) iy1 = ph - 2;
+            if (iy1 > max_iy) iy1 = max_iy;
             float rx1 = sx1 - (float)ix1; float rx0 = 1.0f - rx1;
             float ry1 = sy1 - (float)iy1; float ry0 = 1.0f - ry1;
 
