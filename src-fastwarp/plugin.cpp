@@ -4,7 +4,6 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
-#include <cstdio>
 
 struct FastWarpData {
     VSNode* node0;
@@ -254,6 +253,10 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
             }
         }
 
+        vsapi->freeFrame(src0);
+        vsapi->freeFrame(src1);
+        vsapi->freeFrame(flow);
+
         return dst;
     }
     return nullptr;
@@ -270,39 +273,29 @@ static void VS_CC fastwarpFree(void* instanceData, VSCore* core, const VSAPI* vs
 }
 
 static void VS_CC fastwarpCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi) {
-    FILE* logf = fopen("C:\\Users\\dimam\\fastwarp.log", "w");
-    if (logf) { fprintf(logf, "fastwarpCreate entered\n"); fflush(logf); }
-
     int err = 0;
     VSNode* node0 = vsapi->mapGetNode(in, "clip0", 0, &err);
-    if (logf) { fprintf(logf, "node0: %p, err: %d\n", node0, err); fflush(logf); }
     if (err || !node0) {
         vsapi->mapSetError(out, "FastWarp: Failed to get clip0");
-        if (logf) fclose(logf);
         return;
     }
 
     VSNode* node1 = vsapi->mapGetNode(in, "clip1", 0, &err);
-    if (logf) { fprintf(logf, "node1: %p, err: %d\n", node1, err); fflush(logf); }
     if (err || !node1) {
         vsapi->freeNode(node0);
         vsapi->mapSetError(out, "FastWarp: Failed to get clip1");
-        if (logf) fclose(logf);
         return;
     }
 
     VSNode* nodeFlow = vsapi->mapGetNode(in, "flow", 0, &err);
-    if (logf) { fprintf(logf, "nodeFlow: %p, err: %d\n", nodeFlow, err); fflush(logf); }
     if (err || !nodeFlow) {
         vsapi->freeNode(node0);
         vsapi->freeNode(node1);
         vsapi->mapSetError(out, "FastWarp: Failed to get flow");
-        if (logf) fclose(logf);
         return;
     }
 
     const VSVideoInfo* vi_src = vsapi->getVideoInfo(node0);
-    if (logf) { fprintf(logf, "vi_src: %p, width=%d, height=%d\n", vi_src, vi_src ? vi_src->width : 0, vi_src ? vi_src->height : 0); fflush(logf); }
 
     auto d = std::make_unique<FastWarpData>();
     d->node0 = node0;
@@ -310,9 +303,7 @@ static void VS_CC fastwarpCreate(const VSMap* in, VSMap* out, void* userData, VS
     d->nodeFlow = nodeFlow;
     d->vi = vi_src;
 
-    if (logf) { fprintf(logf, "Calling createVideoFilter with vi_src and nullptr deps...\n"); fflush(logf); }
     vsapi->createVideoFilter(out, "Warp", vi_src, fastwarpGetFrame, fastwarpFree, fmParallel, nullptr, 0, d.release(), core);
-    if (logf) { fprintf(logf, "createVideoFilter returned successfully!\n"); fclose(logf); }
 }
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
