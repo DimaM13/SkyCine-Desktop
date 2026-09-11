@@ -5,7 +5,7 @@ import {
   RotateCcw, RotateCw, Settings, MessageSquare,
   Users, Radio, Disc3, Subtitles, Volume1,
   ArrowLeft, Share2, Activity, Cpu, Film, Music,
-  Minus, Square, X, Sparkles
+  Minus, Square, X, Sparkles, ChevronRight
 } from 'lucide-react';
 import { MediaItem, MediaTrack, RoomState } from '../../types';
 import { ReactionOverlay } from './ReactionOverlay';
@@ -34,6 +34,23 @@ interface CustomPlayerProps {
   onAttachGetCurrentTime?: (fn: () => number) => void;
   initialPosition?: number;
   videoRef?: React.RefObject<HTMLVideoElement>;
+}
+
+export type RifeMode =
+  | 'off'
+  | 'auto_2x' | 'auto_3x'
+  | 'lite_2x' | 'lite_3x'
+  | 'balanced_2x' | 'balanced_3x'
+  | 'high_2x' | 'high_3x'
+  | 'ultra_2x' | 'ultra_3x';
+
+export interface RifeStatus {
+  mode: RifeMode;
+  baseFps: number;
+  targetFps: number;
+  targetRes?: number;
+  isLocked: boolean;
+  tuning: boolean;
 }
 
 export const CustomPlayer: React.FC<CustomPlayerProps> = ({
@@ -102,17 +119,14 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const [selectedQuality, setSelectedQuality] = useState<string>('original');
   const [selectedAudioTrack, setSelectedAudioTrack] = useState<number>(defaultAudioTrackIndex);
   const [selectedSubtitleTrack, setSelectedSubtitleTrack] = useState<number>(-1);
-type RifeMode =
-  | 'off'
-  | 'auto_2x' | 'auto_3x'
-  | 'lite_2x' | 'lite_3x'
-  | 'balanced_2x' | 'balanced_3x'
-  | 'high_2x' | 'high_3x'
-  | 'ultra_2x' | 'ultra_3x';
 
   const [rifeMode, setRifeModeState] = useState<RifeMode>('off');
+  const [rifeStatus, setRifeStatus] = useState<RifeStatus | null>(null);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
-  const [activeMenuTab, setActiveMenuTab] = useState<'root' | 'quality' | 'audio' | 'subtitles' | 'rife'>('root');
+  const [activeMenuTab, setActiveMenuTab] = useState<
+    'root' | 'quality' | 'audio' | 'subtitles' | 'rife' |
+    'rife-auto' | 'rife-eco' | 'rife-balance' | 'rife-high' | 'rife-ultra'
+  >('root');
 
   const handleSetRifeMode = (mode: RifeMode) => {
     setRifeModeState(mode);
@@ -121,6 +135,58 @@ type RifeMode =
       dp?.setRifeMode?.(mode);
     }
   };
+
+  const rifeBadgeInfo = useMemo(() => {
+    if (rifeMode === 'off') return null;
+
+    const baseFps = Math.round(rifeStatus?.baseFps || 24);
+    const factor = rifeMode.includes('3x') ? 3 : 2;
+    const targetFps = Math.round(rifeStatus?.targetFps || baseFps * factor);
+
+    let modeName = '';
+    let resText = '';
+
+    if (rifeMode === 'auto_2x') {
+      modeName = 'Авто 2x';
+      resText = rifeStatus?.tuning
+        ? `подбор ${rifeStatus?.targetRes || 540}p...`
+        : `${rifeStatus?.targetRes || 540}p`;
+    } else if (rifeMode === 'auto_3x') {
+      modeName = 'Авто 3x';
+      resText = rifeStatus?.tuning
+        ? `подбор ${rifeStatus?.targetRes || 540}p...`
+        : `${rifeStatus?.targetRes || 540}p`;
+    } else if (rifeMode === 'lite_2x') {
+      modeName = 'Эко 2x';
+      resText = '360p';
+    } else if (rifeMode === 'lite_3x') {
+      modeName = 'Эко 3x';
+      resText = '360p';
+    } else if (rifeMode === 'balanced_2x') {
+      modeName = 'Баланс 2x';
+      resText = '540p';
+    } else if (rifeMode === 'balanced_3x') {
+      modeName = 'Баланс 3x';
+      resText = '540p';
+    } else if (rifeMode === 'high_2x') {
+      modeName = 'Высокое 2x';
+      resText = '720p';
+    } else if (rifeMode === 'high_3x') {
+      modeName = 'Высокое 3x';
+      resText = '720p';
+    } else if (rifeMode === 'ultra_2x') {
+      modeName = 'Ультра 2x';
+      resText = '1080p';
+    } else if (rifeMode === 'ultra_3x') {
+      modeName = 'Ультра 3x';
+      resText = '1080p';
+    }
+
+    return {
+      text: `RIFE AI ${modeName} (${resText}) • ${baseFps} → ${targetFps} FPS`,
+      isTuning: rifeStatus?.tuning ?? false
+    };
+  }, [rifeMode, rifeStatus]);
 
   const isAppleDevice = useMemo(() => {
     if (typeof navigator === 'undefined') return false;
@@ -319,6 +385,7 @@ type RifeMode =
 
   useEffect(() => {
     setRifeModeState('off');
+    setRifeStatus(null);
     if (isDesktop) {
       const dp = (window as any).desktopPlayer;
       dp?.setRifeMode?.('off');
@@ -330,9 +397,22 @@ type RifeMode =
     const dp = (window as any).desktopPlayer;
     if (!dp) return;
 
+    dp.getRifeStatus?.().then((st: RifeStatus | null) => {
+      if (st) {
+        setRifeStatus(st);
+        if (st.mode) setRifeModeState(st.mode);
+      }
+    }).catch(() => {});
+
     const unsubs = [
       dp.onVideoReady?.(() => {
         setIsBuffering(false);
+        dp.getRifeStatus?.().then((st: RifeStatus | null) => {
+          if (st) {
+            setRifeStatus(st);
+            if (st.mode) setRifeModeState(st.mode);
+          }
+        }).catch(() => {});
       }),
       dp.onTimeUpdate((t: number) => {
         if (!isScrubbing) setCurrentTime(t);
@@ -355,6 +435,12 @@ type RifeMode =
       }),
       dp.onBuffering((buf: boolean) => {
         setIsBuffering(buf);
+      }),
+      dp.onRifeStatus?.((st: RifeStatus) => {
+        if (st) {
+          setRifeStatus(st);
+          if (st.mode) setRifeModeState(st.mode);
+        }
       }),
       dp.onEnded(() => {
         setIsPlaying(false);
@@ -1038,19 +1124,10 @@ type RifeMode =
               )}
 
               {/* RIFE AI Frame Generation Badge (Desktop Only) */}
-              {isDesktop && rifeMode !== 'off' && (
+              {isDesktop && rifeBadgeInfo && (
                 <span className="px-2.5 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1.5 shadow-sm backdrop-blur-md">
-                  <Sparkles className="w-3 h-3 text-cinema-gold animate-pulse" />
-                  {rifeMode === 'auto_2x' && 'RIFE AI 2X (АВТО)'}
-                  {rifeMode === 'auto_3x' && 'RIFE AI 3X (АВТО)'}
-                  {rifeMode === 'lite_2x' && 'RIFE AI 2X (ЭКО 360p)'}
-                  {rifeMode === 'lite_3x' && 'RIFE AI 3X (ЭКО 360p)'}
-                  {rifeMode === 'balanced_2x' && 'RIFE AI 2X (БАЛАНС 540p)'}
-                  {rifeMode === 'balanced_3x' && 'RIFE AI 3X (БАЛАНС 540p)'}
-                  {rifeMode === 'high_2x' && 'RIFE AI 2X (ВЫСОКОЕ 720p)'}
-                  {rifeMode === 'high_3x' && 'RIFE AI 3X (ВЫСОКОЕ 720p)'}
-                  {rifeMode === 'ultra_2x' && 'RIFE AI 2X (МАКС 1080p)'}
-                  {rifeMode === 'ultra_3x' && 'RIFE AI 3X (МАКС 1080p)'}
+                  <Sparkles className={`w-3 h-3 text-cinema-gold ${rifeBadgeInfo.isTuning ? 'animate-spin' : 'animate-pulse'}`} />
+                  {rifeBadgeInfo.text}
                 </span>
               )}
 
@@ -1314,7 +1391,7 @@ type RifeMode =
               </button>
 
               {showSettingsMenu && (
-                <div className={`absolute bottom-12 right-0 ${activeMenuTab === 'rife' ? 'w-80' : 'w-64'} bg-cinema-900/95 border border-white/15 backdrop-blur-xl rounded-2xl p-3 shadow-2xl z-50 text-xs text-slate-200 transition-all duration-200`}>
+                <div className={`absolute bottom-12 right-0 ${activeMenuTab.startsWith('rife') ? 'w-80' : 'w-64'} bg-cinema-900/95 border border-white/15 backdrop-blur-xl rounded-2xl p-3 shadow-2xl z-50 text-xs text-slate-200 transition-all duration-200`}>
                   {activeMenuTab === 'root' && (
                     <div className="flex flex-col gap-1">
                       <div className="text-[11px] font-semibold text-slate-400 px-2 py-1 uppercase">Настройки потока</div>
@@ -1343,8 +1420,8 @@ type RifeMode =
                             {rifeMode === 'balanced_3x' && 'Баланс 3x'}
                             {rifeMode === 'high_2x' && 'Высокое 2x'}
                             {rifeMode === 'high_3x' && 'Высокое 3x'}
-                            {rifeMode === 'ultra_2x' && 'Макс 2x'}
-                            {rifeMode === 'ultra_3x' && 'Макс 3x'}
+                            {rifeMode === 'ultra_2x' && 'Ультра 2x'}
+                            {rifeMode === 'ultra_3x' && 'Ультра 3x'}
                           </span>
                         </button>
                       )}
@@ -1410,8 +1487,8 @@ type RifeMode =
                   )}
 
                   {activeMenuTab === 'rife' && (
-                    <div className="flex flex-col gap-2 max-h-[420px] overflow-y-auto pr-1">
-                      <button onClick={() => setActiveMenuTab('root')} className="text-left text-[11px] text-cinema-gold font-semibold mb-0.5 hover:underline">
+                    <div className="flex flex-col gap-1.5 max-h-[420px] overflow-y-auto pr-1">
+                      <button onClick={() => setActiveMenuTab('root')} className="text-left text-[11px] text-cinema-gold font-semibold mb-0.5 hover:underline flex items-center gap-1">
                         ← Назад
                       </button>
 
@@ -1438,175 +1515,323 @@ type RifeMode =
                         {rifeMode === 'off' && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
                       </button>
 
-                      {/* Раздел 1: АВТОМАТИЧЕСКИЙ ПОДБОР */}
-                      <div className="pt-1">
-                        <div className="text-[10px] font-bold tracking-wider text-cinema-gold/90 uppercase px-1 pb-1 flex items-center gap-1.5">
-                          <Sparkles className="w-3 h-3 text-cinema-gold" /> Автоматический подбор
+                      {/* Категория 1: Автоматический режим */}
+                      <button
+                        onClick={() => setActiveMenuTab('rife-auto')}
+                        className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                          rifeMode === 'auto_2x' || rifeMode === 'auto_3x'
+                            ? 'bg-cinema-gold/15 text-cinema-gold'
+                            : 'hover:bg-white/10 text-slate-200'
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="font-semibold text-xs leading-tight flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-cinema-gold shrink-0" />
+                            Автоматический режим
+                          </p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                            {rifeMode === 'auto_2x' || rifeMode === 'auto_3x'
+                              ? `Активно: ${rifeMode === 'auto_2x' ? 'Авто 2x' : 'Авто 3x'}${rifeStatus?.targetRes ? ` (${rifeStatus.targetRes}p)` : ''}`
+                              : 'Адаптивный подбор под нагрузку GPU'}
+                          </p>
                         </div>
-                        <div className="flex flex-col gap-1">
-                          {[
-                            {
-                              id: 'auto_2x' as RifeMode,
-                              title: 'Авто 2x',
-                              desc: 'Адаптивное удвоение под нагрузку вашей GPU'
-                            },
-                            {
-                              id: 'auto_3x' as RifeMode,
-                              title: 'Авто 3x',
-                              desc: 'Адаптивное утроение (для 120–144 Гц мониторов)'
-                            }
-                          ].map((item) => (
-                            <button
-                              key={item.id}
-                              onClick={() => {
-                                handleSetRifeMode(item.id);
-                                setShowSettingsMenu(false);
-                              }}
-                              className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
-                                rifeMode === item.id
-                                  ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
-                                  : 'hover:bg-white/10 text-slate-200'
-                              }`}
-                            >
-                              <div>
-                                <p className="font-semibold text-xs leading-tight">{item.title}</p>
-                                <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
-                              </div>
-                              {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                        <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                      </button>
 
-                      {/* Раздел 2: ЭКО / ЛЁГКИЙ */}
-                      <div className="pt-1">
-                        <div className="text-[10px] font-bold tracking-wider text-emerald-400 uppercase px-1 pb-1">
-                          Эко / Лёгкий режим (360p)
+                      {/* Категория 2: Эко (360p) */}
+                      <button
+                        onClick={() => setActiveMenuTab('rife-eco')}
+                        className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                          rifeMode === 'lite_2x' || rifeMode === 'lite_3x'
+                            ? 'bg-cinema-gold/15 text-cinema-gold'
+                            : 'hover:bg-white/10 text-slate-200'
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="font-semibold text-xs leading-tight">Эко режим (360p)</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                            {rifeMode === 'lite_2x' || rifeMode === 'lite_3x'
+                              ? `Активно: ${rifeMode === 'lite_2x' ? 'Эко 2x' : 'Эко 3x'}`
+                              : 'Минимальная нагрузка и энергопотребление'}
+                          </p>
                         </div>
-                        <div className="flex flex-col gap-1">
-                          {[
-                            {
-                              id: 'lite_2x' as RifeMode,
-                              title: 'Эко 2x (360p)',
-                              desc: 'Минимальный нагрев, тихий режим для ноутбуков'
-                            },
-                            {
-                              id: 'lite_3x' as RifeMode,
-                              title: 'Эко 3x (360p)',
-                              desc: '3x утроение с минимальной нагрузкой на GPU'
-                            }
-                          ].map((item) => (
-                            <button
-                              key={item.id}
-                              onClick={() => {
-                                handleSetRifeMode(item.id);
-                                setShowSettingsMenu(false);
-                              }}
-                              className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
-                                rifeMode === item.id
-                                  ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
-                                  : 'hover:bg-white/10 text-slate-200'
-                              }`}
-                            >
-                              <div>
-                                <p className="font-semibold text-xs leading-tight">{item.title}</p>
-                                <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
-                              </div>
-                              {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                        <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                      </button>
 
-                      {/* Раздел 3: БАЛАНС */}
-                      <div className="pt-1">
-                        <div className="text-[10px] font-bold tracking-wider text-blue-400 uppercase px-1 pb-1">
-                          Баланс качества и скорости (540p)
+                      {/* Категория 3: Баланс (540p) */}
+                      <button
+                        onClick={() => setActiveMenuTab('rife-balance')}
+                        className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                          rifeMode === 'balanced_2x' || rifeMode === 'balanced_3x'
+                            ? 'bg-cinema-gold/15 text-cinema-gold'
+                            : 'hover:bg-white/10 text-slate-200'
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="font-semibold text-xs leading-tight">Баланс качества и скорости (540p)</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                            {rifeMode === 'balanced_2x' || rifeMode === 'balanced_3x'
+                              ? `Активно: ${rifeMode === 'balanced_2x' ? 'Баланс 2x' : 'Баланс 3x'}`
+                              : 'Оптимальный баланс качества и стабильности'}
+                          </p>
                         </div>
-                        <div className="flex flex-col gap-1">
-                          {[
-                            {
-                              id: 'balanced_2x' as RifeMode,
-                              title: 'Баланс 2x (540p)',
-                              desc: 'Оптимальный поток (идеально для RTX 3050)'
-                            },
-                            {
-                              id: 'balanced_3x' as RifeMode,
-                              title: 'Баланс 3x (540p)',
-                              desc: '3x утроение с отличной детализацией движения'
-                            }
-                          ].map((item) => (
-                            <button
-                              key={item.id}
-                              onClick={() => {
-                                handleSetRifeMode(item.id);
-                                setShowSettingsMenu(false);
-                              }}
-                              className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
-                                rifeMode === item.id
-                                  ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
-                                  : 'hover:bg-white/10 text-slate-200'
-                              }`}
-                            >
-                              <div>
-                                <p className="font-semibold text-xs leading-tight">{item.title}</p>
-                                <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
-                              </div>
-                              {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                        <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                      </button>
 
-                      {/* Раздел 4: ВЫСОКОЕ И МАКСИМАЛЬНОЕ */}
-                      <div className="pt-1">
-                        <div className="text-[10px] font-bold tracking-wider text-amber-400 uppercase px-1 pb-1">
-                          Высокое и максимальное качество
+                      {/* Категория 4: Высокое (720p) */}
+                      <button
+                        onClick={() => setActiveMenuTab('rife-high')}
+                        className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                          rifeMode === 'high_2x' || rifeMode === 'high_3x'
+                            ? 'bg-cinema-gold/15 text-cinema-gold'
+                            : 'hover:bg-white/10 text-slate-200'
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="font-semibold text-xs leading-tight">Высокое качество (720p)</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                            {rifeMode === 'high_2x' || rifeMode === 'high_3x'
+                              ? `Активно: ${rifeMode === 'high_2x' ? 'Высокое 2x' : 'Высокое 3x'}`
+                              : 'Повышенная чёткость оптического потока'}
+                          </p>
                         </div>
-                        <div className="flex flex-col gap-1">
-                          {[
-                            {
-                              id: 'high_2x' as RifeMode,
-                              title: 'Высокое 2x (720p)',
-                              desc: 'Повышенная четкость оптического потока'
-                            },
-                            {
-                              id: 'high_3x' as RifeMode,
-                              title: 'Высокое 3x (720p)',
-                              desc: '3x утроение на разрешении 720p'
-                            },
-                            {
-                              id: 'ultra_2x' as RifeMode,
-                              title: 'Максимальное 2x (1080p)',
-                              desc: 'Нативный 1080p поток (для мощных RTX 3070+)'
-                            },
-                            {
-                              id: 'ultra_3x' as RifeMode,
-                              title: 'Максимальное 3x (1080p)',
-                              desc: 'Нативный 1080p поток (для мощных RTX 4080+)'
-                            }
-                          ].map((item) => (
-                            <button
-                              key={item.id}
-                              onClick={() => {
-                                handleSetRifeMode(item.id);
-                                setShowSettingsMenu(false);
-                              }}
-                              className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
-                                rifeMode === item.id
-                                  ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
-                                  : 'hover:bg-white/10 text-slate-200'
-                              }`}
-                            >
-                              <div>
-                                <p className="font-semibold text-xs leading-tight">{item.title}</p>
-                                <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
-                              </div>
-                              {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
-                            </button>
-                          ))}
+                        <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                      </button>
+
+                      {/* Категория 5: Ультра (1080p) */}
+                      <button
+                        onClick={() => setActiveMenuTab('rife-ultra')}
+                        className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                          rifeMode === 'ultra_2x' || rifeMode === 'ultra_3x'
+                            ? 'bg-cinema-gold/15 text-cinema-gold'
+                            : 'hover:bg-white/10 text-slate-200'
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="font-semibold text-xs leading-tight">Ультра качество (1080p)</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                            {rifeMode === 'ultra_2x' || rifeMode === 'ultra_3x'
+                              ? `Активно: ${rifeMode === 'ultra_2x' ? 'Ультра 2x' : 'Ультра 3x'}`
+                              : 'Максимальная детализация нативного 1080p потока'}
+                          </p>
                         </div>
+                        <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Подменю 1: Автоматический режим */}
+                  {activeMenuTab === 'rife-auto' && (
+                    <div className="flex flex-col gap-2">
+                      <button onClick={() => setActiveMenuTab('rife')} className="text-left text-[11px] text-cinema-gold font-semibold mb-0.5 hover:underline flex items-center gap-1">
+                        ← Назад в RIFE AI
+                      </button>
+                      <div className="text-[10px] text-slate-400 px-1 pb-1 leading-snug border-b border-white/10">
+                        Автоматический подбор оптимального разрешения потока без пропусков кадров
                       </div>
+                      {[
+                        {
+                          id: 'auto_2x' as RifeMode,
+                          title: 'Авто 2x',
+                          desc: 'Адаптивное удвоение частоты кадров'
+                        },
+                        {
+                          id: 'auto_3x' as RifeMode,
+                          title: 'Авто 3x',
+                          desc: 'Адаптивное утроение частоты кадров (для 120–144 Гц)'
+                        }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            handleSetRifeMode(item.id);
+                            setShowSettingsMenu(false);
+                          }}
+                          className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                            rifeMode === item.id
+                              ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
+                              : 'hover:bg-white/10 text-slate-200'
+                          }`}
+                        >
+                          <div>
+                            <p className="font-semibold text-xs leading-tight">{item.title}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
+                          </div>
+                          {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Подменю 2: Эко (360p) */}
+                  {activeMenuTab === 'rife-eco' && (
+                    <div className="flex flex-col gap-2">
+                      <button onClick={() => setActiveMenuTab('rife')} className="text-left text-[11px] text-cinema-gold font-semibold mb-0.5 hover:underline flex items-center gap-1">
+                        ← Назад в RIFE AI
+                      </button>
+                      <div className="text-[10px] text-slate-400 px-1 pb-1 leading-snug border-b border-white/10">
+                        Эко режим (360p) — минимальная нагрузка на систему и энергопотребление
+                      </div>
+                      {[
+                        {
+                          id: 'lite_2x' as RifeMode,
+                          title: 'Эко 2x (360p)',
+                          desc: 'Удвоение частоты кадров с минимальной нагрузкой'
+                        },
+                        {
+                          id: 'lite_3x' as RifeMode,
+                          title: 'Эко 3x (360p)',
+                          desc: 'Утроение частоты кадров с минимальной нагрузкой'
+                        }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            handleSetRifeMode(item.id);
+                            setShowSettingsMenu(false);
+                          }}
+                          className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                            rifeMode === item.id
+                              ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
+                              : 'hover:bg-white/10 text-slate-200'
+                          }`}
+                        >
+                          <div>
+                            <p className="font-semibold text-xs leading-tight">{item.title}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
+                          </div>
+                          {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Подменю 3: Баланс (540p) */}
+                  {activeMenuTab === 'rife-balance' && (
+                    <div className="flex flex-col gap-2">
+                      <button onClick={() => setActiveMenuTab('rife')} className="text-left text-[11px] text-cinema-gold font-semibold mb-0.5 hover:underline flex items-center gap-1">
+                        ← Назад в RIFE AI
+                      </button>
+                      <div className="text-[10px] text-slate-400 px-1 pb-1 leading-snug border-b border-white/10">
+                        Баланс (540p) — оптимальное соотношение чёткости интерполяции и плавности
+                      </div>
+                      {[
+                        {
+                          id: 'balanced_2x' as RifeMode,
+                          title: 'Баланс 2x (540p)',
+                          desc: 'Удвоение частоты кадров с хорошей чёткостью'
+                        },
+                        {
+                          id: 'balanced_3x' as RifeMode,
+                          title: 'Баланс 3x (540p)',
+                          desc: 'Утроение частоты кадров с отличной детализацией'
+                        }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            handleSetRifeMode(item.id);
+                            setShowSettingsMenu(false);
+                          }}
+                          className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                            rifeMode === item.id
+                              ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
+                              : 'hover:bg-white/10 text-slate-200'
+                          }`}
+                        >
+                          <div>
+                            <p className="font-semibold text-xs leading-tight">{item.title}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
+                          </div>
+                          {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Подменю 4: Высокое (720p) */}
+                  {activeMenuTab === 'rife-high' && (
+                    <div className="flex flex-col gap-2">
+                      <button onClick={() => setActiveMenuTab('rife')} className="text-left text-[11px] text-cinema-gold font-semibold mb-0.5 hover:underline flex items-center gap-1">
+                        ← Назад в RIFE AI
+                      </button>
+                      <div className="text-[10px] text-slate-400 px-1 pb-1 leading-snug border-b border-white/10">
+                        Высокое качество (720p) — повышенная чёткость векторов движения
+                      </div>
+                      {[
+                        {
+                          id: 'high_2x' as RifeMode,
+                          title: 'Высокое 2x (720p)',
+                          desc: 'Удвоение частоты кадров повышенной чёткости'
+                        },
+                        {
+                          id: 'high_3x' as RifeMode,
+                          title: 'Высокое 3x (720p)',
+                          desc: 'Утроение частоты кадров повышенной чёткости'
+                        }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            handleSetRifeMode(item.id);
+                            setShowSettingsMenu(false);
+                          }}
+                          className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                            rifeMode === item.id
+                              ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
+                              : 'hover:bg-white/10 text-slate-200'
+                          }`}
+                        >
+                          <div>
+                            <p className="font-semibold text-xs leading-tight">{item.title}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
+                          </div>
+                          {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Подменю 5: Ультра (1080p) */}
+                  {activeMenuTab === 'rife-ultra' && (
+                    <div className="flex flex-col gap-2">
+                      <button onClick={() => setActiveMenuTab('rife')} className="text-left text-[11px] text-cinema-gold font-semibold mb-0.5 hover:underline flex items-center gap-1">
+                        ← Назад в RIFE AI
+                      </button>
+                      <div className="text-[10px] text-slate-400 px-1 pb-1 leading-snug border-b border-white/10">
+                        Ультра качество (1080p) — нативный 1080p оптический поток
+                      </div>
+                      {[
+                        {
+                          id: 'ultra_2x' as RifeMode,
+                          title: 'Ультра 2x (1080p)',
+                          desc: 'Удвоение частоты кадров в разрешении 1080p'
+                        },
+                        {
+                          id: 'ultra_3x' as RifeMode,
+                          title: 'Ультра 3x (1080p)',
+                          desc: 'Утроение частоты кадров в разрешении 1080p'
+                        }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            handleSetRifeMode(item.id);
+                            setShowSettingsMenu(false);
+                          }}
+                          className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${
+                            rifeMode === item.id
+                              ? 'bg-cinema-gold/20 text-cinema-gold font-bold'
+                              : 'hover:bg-white/10 text-slate-200'
+                          }`}
+                        >
+                          <div>
+                            <p className="font-semibold text-xs leading-tight">{item.title}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">{item.desc}</p>
+                          </div>
+                          {rifeMode === item.id && <span className="text-cinema-gold font-bold text-sm ml-2">✓</span>}
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>

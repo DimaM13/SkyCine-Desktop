@@ -37,6 +37,15 @@ export type RifeMode =
   | 'high_2x' | 'high_3x'
   | 'ultra_2x' | 'ultra_3x';
 
+export interface RifeStatus {
+  mode: RifeMode;
+  baseFps: number;
+  targetFps: number;
+  targetRes?: number;
+  isLocked: boolean;
+  tuning: boolean;
+}
+
 export class MpvController extends EventEmitter {
   private proc: ChildProcess | null = null;
   private socket: net.Socket | null = null;
@@ -49,7 +58,7 @@ export class MpvController extends EventEmitter {
   private isStarting = false;
   private currentRifeMode: RifeMode = 'off';
 
-  // Dynamic real-time drop detection state (zero permanent disk cache)
+  // Dynamic real-time FPS monitor state (zero permanent disk cache)
   private isPaused: boolean = false;
   private autoMonitoringTimer: NodeJS.Timeout | null = null;
   private autoCurrentResIndex: number = 0;
@@ -60,6 +69,9 @@ export class MpvController extends EventEmitter {
   private isApplyingRife: boolean = false;
   private readonly AUTO_RES_LADDER: number[] = [720, 540, 480, 360];
   private activeLadder: number[] = [720, 540, 480, 360];
+  private rifeDetectedBaseFps: number = 24;
+  private rifeCurrentTargetRes: number = 720;
+  private rifeIsTuning: boolean = false;
 
   constructor() {
     super();
@@ -92,6 +104,7 @@ export class MpvController extends EventEmitter {
       this.stopAutoDropMonitor();
       this.autoIsLocked = false;
       this.autoCurrentResIndex = 0;
+      this.emitRifeStatus();
       try {
         await this.sendCommand(['set_property', 'vf', '']);
       } catch {}
@@ -108,6 +121,7 @@ export class MpvController extends EventEmitter {
     this.stopAutoDropMonitor();
     this.autoIsLocked = false;
     this.autoCurrentResIndex = 0;
+    this.emitRifeStatus();
     this.destroy();
 
     this.pipePath = `\\\\.\\pipe\\skycine_mpv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -125,6 +139,8 @@ export class MpvController extends EventEmitter {
       '--hwdec=auto-copy',
       '--vo=gpu-next',
       '--gpu-api=d3d11',
+      '--framedrop=vo',
+      '--video-sync=audio',
       '--osc=no',
       '--osd-level=0',
       '--osd-bar=no',
@@ -214,6 +230,7 @@ export class MpvController extends EventEmitter {
     this.observeProperty(4, 'track-list');
     this.observeProperty(5, 'volume');
     this.observeProperty(6, 'mute');
+    this.observeProperty(7, 'container-fps');
 
     // Flush any queued commands
     while (this.sendQueue.length > 0) {
@@ -309,13 +326,21 @@ export class MpvController extends EventEmitter {
             this.emit('mute', msg.data);
           }
           break;
+        case 'container-fps':
+          if (typeof msg.data === 'number' && msg.data > 0) {
+            this.rifeDetectedBaseFps = msg.data;
+            this.emitRifeStatus();
+          }
+          break;
       }
     } else if (msg.event === 'playback-restart') {
-      if (!this.autoIsLocked && (this.currentRifeMode === 'auto_2x' || this.currentRifeMode === 'auto_3x')) {
-        this.autoGraceUntil = Date.now() + 4000;
-        this.autoStableSince = 0;
-      }
       this.emit('video-ready');
+      this.sendCommand(['get_property', 'container-fps']).then((res) => {
+        if (res && typeof res.data === 'number' && res.data > 0) {
+          this.rifeDetectedBaseFps = res.data;
+          this.emitRifeStatus();
+        }
+      }).catch(() => {});
     } else if (msg.event === 'end-file') {
       this.emit('ended');
     }
@@ -357,8 +382,8 @@ export class MpvController extends EventEmitter {
   }
 
   public async seek(targetTime: number): Promise<void> {
-    if (!this.autoIsLocked && (this.currentRifeMode === 'auto_2x' || this.currentRifeMode === 'auto_3x')) {
-      this.autoGraceUntil = Date.now() + 4000;
+    if (this.rifeIsTuning) {
+      this.autoGraceUntil = Date.now() + 1000;
       this.autoStableSince = 0;
     }
     await this.sendCommand(['seek', targetTime, 'absolute']);
@@ -388,18 +413,47 @@ export class MpvController extends EventEmitter {
     return this.currentRifeMode;
   }
 
+  public getRifeStatus(): RifeStatus {
+    const is3x = this.currentRifeMode.includes('3x');
+    const factor = is3x ? 3 : 2;
+    const baseFps = Math.round(this.rifeDetectedBaseFps || 24);
+    const targetFps = this.currentRifeMode === 'off' ? baseFps : Math.round(baseFps * factor);
+
+    let res = this.rifeCurrentTargetRes;
+    if (this.currentRifeMode === 'lite_2x' || this.currentRifeMode === 'lite_3x') res = 360;
+    else if (this.currentRifeMode === 'balanced_2x' || this.currentRifeMode === 'balanced_3x') res = 540;
+    else if (this.currentRifeMode === 'high_2x' || this.currentRifeMode === 'high_3x') res = 720;
+    else if (this.currentRifeMode === 'ultra_2x' || this.currentRifeMode === 'ultra_3x') res = 1080;
+
+    return {
+      mode: this.currentRifeMode,
+      baseFps,
+      targetFps,
+      targetRes: this.currentRifeMode === 'off' ? undefined : res,
+      isLocked: this.autoIsLocked,
+      tuning: this.rifeIsTuning
+    };
+  }
+
+  private emitRifeStatus(): void {
+    this.emit('rife-status', this.getRifeStatus());
+  }
+
   public async setRifeMode(mode: RifeMode): Promise<void> {
     this.currentRifeMode = mode;
     this.stopAutoDropMonitor();
     this.autoIsLocked = false;
     this.autoCurrentResIndex = 0;
+    this.rifeIsTuning = false;
 
     if (mode === 'off') {
       console.log('[MPV Controller] 🚫 Disabling RIFE AI frame generation');
+      this.emitRifeStatus();
       await this.sendCommand(['set_property', 'vf', '']);
     } else if (mode === 'auto_2x' || mode === 'auto_3x') {
       await this.startAutoDropMonitor(mode);
     } else {
+      this.emitRifeStatus();
       await this.applyRifeMode(mode);
     }
   }
@@ -415,41 +469,55 @@ export class MpvController extends EventEmitter {
     this.stopAutoDropMonitor();
     this.autoIsLocked = false;
     this.autoCurrentResIndex = 0;
+    this.rifeIsTuning = true;
 
+    // Detect video dimensions and container FPS
     let videoHeight = 1080;
+    let is4K = false;
+    let detectedFps = 24;
+
     try {
-      for (let attempt = 0; attempt < 5; attempt++) {
+      for (let attempt = 0; attempt < 6; attempt++) {
         const vparams = await this.sendCommand(['get_property', 'video-params']);
         if (vparams && vparams.data && vparams.data.h) {
           videoHeight = vparams.data.h;
+          if (vparams.data.w > 1920 || vparams.data.h > 1080) {
+            is4K = true;
+          }
+        }
+        const fpsRes = await this.sendCommand(['get_property', 'container-fps']);
+        if (fpsRes && typeof fpsRes.data === 'number' && fpsRes.data > 0) {
+          detectedFps = fpsRes.data;
           break;
         }
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 80));
       }
     } catch {}
 
-    // Never test or run optical flow above the actual video height (never upscale low-res video)
-    const candidateLadder = this.AUTO_RES_LADDER.filter((r) => r <= videoHeight);
-    this.activeLadder = candidateLadder.length > 0 ? candidateLadder : [this.AUTO_RES_LADDER[this.AUTO_RES_LADDER.length - 1]];
+    this.rifeDetectedBaseFps = detectedFps || 24;
+    const factor = mode === 'auto_3x' ? 3 : 2;
+    const targetFps = this.rifeDetectedBaseFps * factor;
+
+    // Smart 4K & Resolution ladder setup:
+    // If 4K, 720p optical flow is too heavy on mid GPUs, so start right at 540p
+    const baseLadder = is4K ? [540, 480, 360] : [720, 540, 480, 360];
+    const candidateLadder = baseLadder.filter((r) => r <= videoHeight);
+    this.activeLadder = candidateLadder.length > 0 ? candidateLadder : [360];
 
     const startRes = this.activeLadder[0];
-    console.log(`[MPV Controller] 🔄 Starting dynamic auto drop monitor for ${mode} at ${startRes}p (videoHeight=${videoHeight}, ladder=${this.activeLadder.join('->')})`);
+    this.rifeCurrentTargetRes = startRes;
+    this.emitRifeStatus();
+
+    console.log(`[MPV Controller] 🔄 Starting fast auto FPS monitor for ${mode} at ${startRes}p (targetFps=${targetFps.toFixed(1)}, is4K=${is4K}, ladder=${this.activeLadder.join('->')})`);
 
     this.isApplyingRife = true;
     await this.applyRifeMode(mode, startRes);
     this.isApplyingRife = false;
 
-    // Grace period: first 4 seconds for video pipeline stabilization / buffer filling
-    this.autoGraceUntil = Date.now() + 4000;
+    // Fast Grace period: 1.5 seconds for video filter initialization
+    this.autoGraceUntil = Date.now() + 1500;
     this.autoStableSince = 0;
-    this.autoBaselineDrops = 0;
-
-    try {
-      const dropRes = await this.sendCommand(['get_property', 'frame-drop-count']);
-      if (dropRes && typeof dropRes.data === 'number') {
-        this.autoBaselineDrops = dropRes.data;
-      }
-    } catch {}
+    let lagStrikeCount = 0;
 
     this.autoMonitoringTimer = setInterval(async () => {
       if (this.autoIsLocked || this.isPaused || !this.isConnected || this.isApplyingRife) {
@@ -457,54 +525,61 @@ export class MpvController extends EventEmitter {
       }
 
       try {
-        const dropRes = await this.sendCommand(['get_property', 'frame-drop-count']);
-        const currentDrops = (dropRes && typeof dropRes.data === 'number') ? dropRes.data : 0;
         const now = Date.now();
-
         if (now < this.autoGraceUntil) {
-          // Stabilization period: ignore initial drops while buffer/filter spins up
-          this.autoBaselineDrops = currentDrops;
-          this.autoStableSince = now;
           return;
         }
 
-        const deltaDrops = currentDrops - this.autoBaselineDrops;
+        // Measure actual output FPS of the video filter
+        const vfFpsRes = await this.sendCommand(['get_property', 'estimated-vf-fps']);
+        const currentVfFps = (vfFpsRes && typeof vfFpsRes.data === 'number') ? vfFpsRes.data : 0;
 
-        if (deltaDrops > 2) {
-          // Drops detected after grace period: downscale to next ladder step
-          if (this.autoCurrentResIndex < this.activeLadder.length - 1) {
-            this.autoCurrentResIndex++;
-            const nextRes = this.activeLadder[this.autoCurrentResIndex];
-            console.log(`[MPV Controller] ⚠️ Frame drops detected (+${deltaDrops} drops). Downscaling RIFE to ${nextRes}p`);
+        // If estimated-vf-fps is valid and significantly below target (threshold < 85%)
+        const isUnderperforming = currentVfFps > 0 && currentVfFps < (targetFps * 0.85);
 
-            this.isApplyingRife = true;
-            await this.applyRifeMode(mode, nextRes);
-            this.isApplyingRife = false;
+        if (isUnderperforming) {
+          lagStrikeCount++;
+          // Require 2 consecutive underperforming checks (~800ms) to avoid transient spikes
+          if (lagStrikeCount >= 2) {
+            lagStrikeCount = 0;
+            if (this.autoCurrentResIndex < this.activeLadder.length - 1) {
+              this.autoCurrentResIndex++;
+              const nextRes = this.activeLadder[this.autoCurrentResIndex];
+              this.rifeCurrentTargetRes = nextRes;
+              this.emitRifeStatus();
+              console.log(`[MPV Controller] ⚡ Low FPS detected (${currentVfFps.toFixed(1)} < ${(targetFps * 0.85).toFixed(1)}). Fast downscale RIFE to ${nextRes}p`);
 
-            // Reset baseline drops and grant 4 seconds grace period for the new resolution
-            const postDropRes = await this.sendCommand(['get_property', 'frame-drop-count']);
-            this.autoBaselineDrops = (postDropRes && typeof postDropRes.data === 'number') ? postDropRes.data : currentDrops;
-            this.autoGraceUntil = Date.now() + 4000;
-            this.autoStableSince = 0;
-          } else {
-            console.log(`[MPV Controller] 🔒 Reached minimum resolution (${this.activeLadder[this.autoCurrentResIndex]}p), locking.`);
-            this.autoIsLocked = true;
-            this.stopAutoDropMonitor();
+              this.isApplyingRife = true;
+              await this.applyRifeMode(mode, nextRes);
+              this.isApplyingRife = false;
+
+              // 1.5s grace period for the new resolution
+              this.autoGraceUntil = Date.now() + 1500;
+              this.autoStableSince = 0;
+            } else {
+              console.log(`[MPV Controller] 🔒 Reached minimum resolution (${this.activeLadder[this.autoCurrentResIndex]}p), locking.`);
+              this.autoIsLocked = true;
+              this.rifeIsTuning = false;
+              this.emitRifeStatus();
+              this.stopAutoDropMonitor();
+            }
           }
         } else {
-          // Playback is smooth without drops
+          lagStrikeCount = 0;
           if (!this.autoStableSince) {
             this.autoStableSince = now;
-          } else if (now - this.autoStableSince >= 4000) {
-            console.log(`[MPV Controller] ✅ RIFE resolution ${this.activeLadder[this.autoCurrentResIndex]}p is rock-solid stable! Locked for this playback session.`);
+          } else if (now - this.autoStableSince >= 2000) {
+            console.log(`[MPV Controller] ✅ RIFE resolution ${this.activeLadder[this.autoCurrentResIndex]}p is smooth and stable (${currentVfFps.toFixed(1)} FPS)! Locked for this playback session.`);
             this.autoIsLocked = true;
+            this.rifeIsTuning = false;
+            this.emitRifeStatus();
             this.stopAutoDropMonitor();
           }
         }
       } catch (err) {
-        // Ignore transient IPC read errors
+        // Ignore transient IPC errors
       }
-    }, 1000);
+    }, 400);
   }
 
   private async applyRifeMode(mode: RifeMode, explicitRes?: number): Promise<void> {
@@ -546,6 +621,8 @@ export class MpvController extends EventEmitter {
         }
 
         if (detectedFps > 0) {
+          this.rifeDetectedBaseFps = detectedFps;
+          this.emitRifeStatus();
           break;
         }
         await new Promise((r) => setTimeout(r, 100));

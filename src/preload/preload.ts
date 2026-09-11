@@ -8,6 +8,15 @@ export type RifeMode =
   | 'high_2x' | 'high_3x'
   | 'ultra_2x' | 'ultra_3x';
 
+export interface RifeStatus {
+  mode: RifeMode;
+  baseFps: number;
+  targetFps: number;
+  targetRes?: number;
+  isLocked: boolean;
+  tuning: boolean;
+}
+
 export interface DesktopPlayerApi {
   isDesktop: boolean;
   loadFile: (url: string, startPos?: number, title?: string) => Promise<void>;
@@ -22,6 +31,7 @@ export interface DesktopPlayerApi {
   setSpeed: (speed: number) => Promise<void>;
   setRifeMode: (mode: RifeMode) => Promise<void>;
   getRifeMode: () => Promise<RifeMode>;
+  getRifeStatus: () => Promise<RifeStatus | null>;
   showOsdText: (text: string, durationMs?: number) => Promise<void>;
   closePlayer: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
@@ -36,6 +46,7 @@ export interface DesktopPlayerApi {
   onDuration: (callback: (duration: number) => void) => () => void;
   onBuffering: (callback: (isBuffering: boolean) => void) => () => void;
   onTracks: (callback: (tracks: any[]) => void) => () => void;
+  onRifeStatus: (callback: (status: RifeStatus) => void) => () => void;
   onEnded: (callback: () => void) => () => void;
 }
 
@@ -53,6 +64,7 @@ const desktopPlayer: DesktopPlayerApi = {
   setSpeed: (speed) => ipcRenderer.invoke('mpv:setSpeed', speed),
   setRifeMode: (mode) => ipcRenderer.invoke('mpv:setRifeMode', mode),
   getRifeMode: () => ipcRenderer.invoke('mpv:getRifeMode'),
+  getRifeStatus: () => ipcRenderer.invoke('mpv:getRifeStatus'),
   showOsdText: (text, durationMs = 2000) => ipcRenderer.invoke('mpv:showOsd', text, durationMs),
   closePlayer: () => ipcRenderer.invoke('mpv:close'),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggleFullscreen'),
@@ -97,6 +109,11 @@ const desktopPlayer: DesktopPlayerApi = {
     const handler = (_: any, tracks: any[]) => callback(tracks);
     ipcRenderer.on('mpv:tracks', handler);
     return () => ipcRenderer.removeListener('mpv:tracks', handler);
+  },
+  onRifeStatus: (callback) => {
+    const handler = (_: any, status: RifeStatus) => callback(status);
+    ipcRenderer.on('mpv:rife-status', handler);
+    return () => ipcRenderer.removeListener('mpv:rife-status', handler);
   },
   onEnded: (callback) => {
     const handler = () => callback();

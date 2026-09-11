@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
-import { MpvController, RifeMode } from './mpv-controller';
+import { MpvController, RifeMode, RifeStatus } from './mpv-controller';
 
 let mainWindow: BrowserWindow | null = null;
 let mpv: MpvController | null = null;
@@ -127,6 +127,12 @@ async function createWindow() {
     }
   });
 
+  mpv.on('rife-status', (status) => {
+    if (!mainWindow?.isDestroyed()) {
+      mainWindow?.webContents.send('mpv:rife-status', status);
+    }
+  });
+
   // Setup MPV IPC Handlers
   ipcMain.handle('mpv:loadFile', async (_, url, startPos, title) => {
     const parentHwnd = mainWindow?.getNativeWindowHandle().readBigInt64LE(0);
@@ -175,6 +181,10 @@ async function createWindow() {
 
   ipcMain.handle('mpv:getRifeMode', () => {
     return mpv?.getRifeMode() || 'off';
+  });
+
+  ipcMain.handle('mpv:getRifeStatus', () => {
+    return mpv?.getRifeStatus() || null;
   });
 
   ipcMain.handle('mpv:close', async () => {
