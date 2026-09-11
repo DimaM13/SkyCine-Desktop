@@ -29,6 +29,8 @@ function findMpvPath(): string {
   return path.join(process.resourcesPath, 'bin', 'mpv.exe');
 }
 
+export type RifeMode = 'off' | 'auto' | 'auto72' | 'lite' | 'lite72';
+
 export class MpvController extends EventEmitter {
   private proc: ChildProcess | null = null;
   private socket: net.Socket | null = null;
@@ -39,7 +41,7 @@ export class MpvController extends EventEmitter {
   private sendQueue: string[] = [];
   private currentFile: string = '';
   private isStarting = false;
-  private currentRifeMode: 'off' | 'auto' = 'off';
+  private currentRifeMode: RifeMode = 'off';
 
   constructor() {
     super();
@@ -343,16 +345,16 @@ export class MpvController extends EventEmitter {
     await this.sendCommand(['set_property', 'speed', speed]);
   }
 
-  public getRifeMode(): 'off' | 'auto' {
+  public getRifeMode(): RifeMode {
     return this.currentRifeMode;
   }
 
-  public async setRifeMode(mode: 'off' | 'auto'): Promise<void> {
+  public async setRifeMode(mode: RifeMode): Promise<void> {
     this.currentRifeMode = mode;
     await this.applyRifeMode(mode);
   }
 
-  private async applyRifeMode(mode: 'off' | 'auto'): Promise<void> {
+  private async applyRifeMode(mode: RifeMode): Promise<void> {
     const mpvBinPath = findMpvPath();
     const binDir = path.dirname(mpvBinPath);
     const vsDir = path.join(binDir, 'vapoursynth');
@@ -363,7 +365,7 @@ export class MpvController extends EventEmitter {
     } else {
       const scriptName = 'rife_auto.vpy';
       const scriptPath = path.join(vsDir, scriptName).replace(/\\/g, '/');
-      console.log(`[MPV Controller] 🚀 Enabling RIFE AI adaptive 60 FPS frame generation: ${scriptPath}`);
+      console.log(`[MPV Controller] 🚀 Enabling RIFE AI mode=${mode}: ${scriptPath}`);
 
       let is4K = false;
       let detectedFps = 0;
@@ -408,9 +410,10 @@ export class MpvController extends EventEmitter {
         fs.writeFileSync(stateFile, JSON.stringify({
           fps: detectedFps || 24,
           is4K,
+          mode,
           timestamp: Date.now()
         }), 'utf-8');
-        console.log(`[MPV Controller] 💾 Saved current playback state: fps=${detectedFps}, is4K=${is4K}`);
+        console.log(`[MPV Controller] 💾 Saved current playback state: mode=${mode}, fps=${detectedFps}, is4K=${is4K}`);
       } catch (err) {
         console.warn('[MPV Controller] Could not write current_playback.json:', err);
       }

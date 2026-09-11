@@ -85,10 +85,30 @@ def run_benchmark(force=False):
             print(f"[Benchmark] Error measuring {label}p: {e}")
             timings[str(label)] = 999.0
 
+    # Determine recommended resolutions for 2x (48 FPS) and 3x (72 FPS)
+    rec_2x = 360
+    for res in [1080, 720, 540, 480, 360]:
+        if timings.get(str(res), 999.0) <= 22.0:
+            rec_2x = res
+            break
+
+    rec_3x = 360
+    for res in [1080, 720, 540, 480, 360]:
+        if timings.get(str(res), 999.0) <= 15.0:
+            rec_3x = res
+            break
+
+    print(f"[Benchmark] Recommended for 2x (48 FPS): {rec_2x}p (budget <= 22.0 ms)")
+    print(f"[Benchmark] Recommended for 3x (72 FPS): {rec_3x}p (budget <= 15.0 ms)")
+
     result = {
         "gpu": gpu_name,
         "timestamp": int(time.time()),
-        "timings": timings
+        "timings": timings,
+        "recommended": {
+            "2x": rec_2x,
+            "3x": rec_3x
+        }
     }
 
     try:

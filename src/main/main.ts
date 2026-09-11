@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
-import { MpvController } from './mpv-controller';
+import { MpvController, RifeMode } from './mpv-controller';
 
 let mainWindow: BrowserWindow | null = null;
 let mpv: MpvController | null = null;
@@ -169,7 +169,7 @@ async function createWindow() {
     await mpv?.setSpeed(speed);
   });
 
-  ipcMain.handle('mpv:setRifeMode', async (_, mode: 'off' | 'auto') => {
+  ipcMain.handle('mpv:setRifeMode', async (_, mode: RifeMode) => {
     await mpv?.setRifeMode(mode);
   });
 

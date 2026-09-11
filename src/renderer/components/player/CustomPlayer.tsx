@@ -102,11 +102,11 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const [selectedQuality, setSelectedQuality] = useState<string>('original');
   const [selectedAudioTrack, setSelectedAudioTrack] = useState<number>(defaultAudioTrackIndex);
   const [selectedSubtitleTrack, setSelectedSubtitleTrack] = useState<number>(-1);
-  const [rifeMode, setRifeModeState] = useState<'off' | 'auto'>('off');
+  const [rifeMode, setRifeModeState] = useState<'off' | 'auto' | 'auto72' | 'lite' | 'lite72'>('off');
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [activeMenuTab, setActiveMenuTab] = useState<'root' | 'quality' | 'audio' | 'subtitles' | 'rife'>('root');
 
-  const handleSetRifeMode = (mode: 'off' | 'auto') => {
+  const handleSetRifeMode = (mode: 'off' | 'auto' | 'auto72' | 'lite' | 'lite72') => {
     setRifeModeState(mode);
     if (isDesktop) {
       const dp = (window as any).desktopPlayer;
@@ -1307,7 +1307,11 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
                         <button onClick={() => setActiveMenuTab('rife')} className="flex items-center justify-between p-2 rounded-lg hover:bg-white/10">
                           <span className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-cinema-gold animate-pulse" /> Плавность RIFE AI</span>
                           <span className="text-cinema-gold font-medium">
-                            {rifeMode === 'off' ? 'Выкл' : 'Авто (60 FPS)'}
+                            {rifeMode === 'off' && 'Выкл'}
+                            {rifeMode === 'auto' && 'Авто (48 FPS)'}
+                            {rifeMode === 'auto72' && 'Авто (72 FPS)'}
+                            {rifeMode === 'lite' && 'Эко (48 FPS)'}
+                            {rifeMode === 'lite72' && 'Эко (72 FPS)'}
                           </span>
                         </button>
                       )}
@@ -1378,7 +1382,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
                         ← Назад
                       </button>
                       <div className="text-[10px] text-slate-400 px-1 pb-1 leading-snug">
-                        Аппаратная генерация плавности 60 FPS на GPU (RIFE v4.6 Vulkan NCNN)
+                        Генерация кадров с нативным чередованием (100% чёткость оригинала)
                       </div>
                       {[
                         {
@@ -1388,14 +1392,29 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
                         },
                         {
                           id: 'auto',
-                          title: 'Авто (60 FPS)',
-                          desc: 'Адаптивный подбор под вашу видеокарту и FPS видео'
+                          title: 'Авто (48 FPS)',
+                          desc: '2x удвоение, 100% чёткость оригинала'
+                        },
+                        {
+                          id: 'auto72',
+                          title: 'Авто (72 FPS)',
+                          desc: '3x утроение, для экранов 120–144 Гц'
+                        },
+                        {
+                          id: 'lite',
+                          title: 'Эко (48 FPS)',
+                          desc: '2x удвоение, тихий режим / ноутбуки'
+                        },
+                        {
+                          id: 'lite72',
+                          title: 'Эко (72 FPS)',
+                          desc: '3x утроение, тихий режим / ноутбуки'
                         }
                       ].map((item) => (
                         <button
                           key={item.id}
                           onClick={() => {
-                            handleSetRifeMode(item.id as 'off' | 'auto');
+                            handleSetRifeMode(item.id as 'off' | 'auto' | 'auto72' | 'lite' | 'lite72');
                             setShowSettingsMenu(false);
                           }}
                           className={`p-2 rounded-lg text-left flex justify-between items-center transition-all ${

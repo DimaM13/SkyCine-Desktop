@@ -12,8 +12,8 @@ export interface DesktopPlayerApi {
   setAudioTrack: (id: number) => Promise<void>;
   setSubtitleTrack: (id: number | 'no') => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
-  setRifeMode: (mode: 'off' | 'auto') => Promise<void>;
-  getRifeMode: () => Promise<'off' | 'auto'>;
+  setRifeMode: (mode: 'off' | 'auto' | 'auto72' | 'lite' | 'lite72') => Promise<void>;
+  getRifeMode: () => Promise<'off' | 'auto' | 'auto72' | 'lite' | 'lite72'>;
   showOsdText: (text: string, durationMs?: number) => Promise<void>;
   closePlayer: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
