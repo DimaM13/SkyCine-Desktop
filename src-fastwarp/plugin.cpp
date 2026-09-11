@@ -1,17 +1,186 @@
-#include <VapourSynth4.h>
+﻿#include <VapourSynth4.h>
 #include <VSHelper4.h>
-#include "vulkan_warper.h"
 #include <memory>
-#include <string>
+#include <cmath>
+#include <algorithm>
+#include <cstdint>
 
 struct FastWarpData {
     VSNode* node0;
     VSNode* node1;
     VSNode* nodeFlow;
-    VSNode* nodeMask;
     const VSVideoInfo* vi;
-    std::unique_ptr<VulkanWarper> warper;
 };
+
+static inline void warp_plane_uint8(
+    const uint8_t* src0, const uint8_t* src1, uint8_t* dst,
+    int pw, int ph, ptrdiff_t s_stride, ptrdiff_t d_stride,
+    const float* flow_p0, const float* flow_p1, const float* flow_p2,
+    int flow_w, int flow_h, ptrdiff_t flow_stride
+) {
+    const float scale_x = (float)pw / (float)flow_w;
+    const float scale_y = (float)ph / (float)flow_h;
+
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < ph; y++) {
+        float norm_y = ((float)y + 0.5f) / (float)ph;
+        float fy_f = norm_y * (float)flow_h - 0.5f;
+        int fy0 = (int)std::floor(fy_f);
+        if (fy0 < 0) fy0 = 0;
+        if (fy0 > flow_h - 2) fy0 = flow_h - 2;
+        int fy1 = fy0 + 1;
+        float wy1 = fy_f - (float)fy0;
+        float wy0 = 1.0f - wy1;
+
+        uint8_t* out_row = dst + y * d_stride;
+
+        for (int x = 0; x < pw; x++) {
+            float norm_x = ((float)x + 0.5f) / (float)pw;
+            float fx_f = norm_x * (float)flow_w - 0.5f;
+            int fx0 = (int)std::floor(fx_f);
+            if (fx0 < 0) fx0 = 0;
+            if (fx0 > flow_w - 2) fx0 = flow_w - 2;
+            int fx1 = fx0 + 1;
+            float wx1 = fx_f - (float)fx0;
+            float wx0 = 1.0f - wx1;
+
+            ptrdiff_t idx00 = (ptrdiff_t)fy0 * flow_stride + fx0;
+            ptrdiff_t idx01 = (ptrdiff_t)fy0 * flow_stride + fx1;
+            ptrdiff_t idx10 = (ptrdiff_t)fy1 * flow_stride + fx0;
+            ptrdiff_t idx11 = (ptrdiff_t)fy1 * flow_stride + fx1;
+
+            float dx = (flow_p0[idx00] * wx0 + flow_p0[idx01] * wx1) * wy0 +
+                       (flow_p0[idx10] * wx0 + flow_p0[idx11] * wx1) * wy1;
+            float dy = (flow_p1[idx00] * wx0 + flow_p1[idx01] * wx1) * wy0 +
+                       (flow_p1[idx10] * wx0 + flow_p1[idx11] * wx1) * wy1;
+            float mask = (flow_p2[idx00] * wx0 + flow_p2[idx01] * wx1) * wy0 +
+                         (flow_p2[idx10] * wx0 + flow_p2[idx11] * wx1) * wy1;
+
+            float sx0 = (float)x + dx * scale_x;
+            float sy0 = (float)y + dy * scale_y;
+            float sx1 = (float)x - dx * scale_x;
+            float sy1 = (float)y - dy * scale_y;
+
+            // Sample src0
+            int ix0 = (int)std::floor(sx0);
+            int iy0 = (int)std::floor(sy0);
+            if (ix0 < 0) ix0 = 0;
+            if (ix0 > pw - 2) ix0 = pw - 2;
+            if (iy0 < 0) iy0 = 0;
+            if (iy0 > ph - 2) iy0 = ph - 2;
+            float qx1 = sx0 - (float)ix0; float qx0 = 1.0f - qx1;
+            float qy1 = sy0 - (float)iy0; float qy0 = 1.0f - qy1;
+
+            const uint8_t* p0 = src0 + (ptrdiff_t)iy0 * s_stride + ix0;
+            float c0 = ((float)p0[0] * qx0 + (float)p0[1] * qx1) * qy0 +
+                       ((float)p0[s_stride] * qx0 + (float)p0[s_stride + 1] * qx1) * qy1;
+
+            // Sample src1
+            int ix1 = (int)std::floor(sx1);
+            int iy1 = (int)std::floor(sy1);
+            if (ix1 < 0) ix1 = 0;
+            if (ix1 > pw - 2) ix1 = pw - 2;
+            if (iy1 < 0) iy1 = 0;
+            if (iy1 > ph - 2) iy1 = ph - 2;
+            float rx1 = sx1 - (float)ix1; float rx0 = 1.0f - rx1;
+            float ry1 = sy1 - (float)iy1; float ry0 = 1.0f - ry1;
+
+            const uint8_t* p1 = src1 + (ptrdiff_t)iy1 * s_stride + ix1;
+            float c1 = ((float)p1[0] * rx0 + (float)p1[1] * rx1) * ry0 +
+                       ((float)p1[s_stride] * rx0 + (float)p1[s_stride + 1] * rx1) * ry1;
+
+            if (mask < 0.0f) mask = 0.0f;
+            if (mask > 1.0f) mask = 1.0f;
+            float val = c0 * mask + c1 * (1.0f - mask);
+            int ival = (int)(val + 0.5f);
+            if (ival < 0) ival = 0;
+            if (ival > 255) ival = 255;
+            out_row[x] = (uint8_t)ival;
+        }
+    }
+}
+
+static inline void warp_plane_float(
+    const float* src0, const float* src1, float* dst,
+    int pw, int ph, ptrdiff_t s_stride, ptrdiff_t d_stride,
+    const float* flow_p0, const float* flow_p1, const float* flow_p2,
+    int flow_w, int flow_h, ptrdiff_t flow_stride
+) {
+    const float scale_x = (float)pw / (float)flow_w;
+    const float scale_y = (float)ph / (float)flow_h;
+
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < ph; y++) {
+        float norm_y = ((float)y + 0.5f) / (float)ph;
+        float fy_f = norm_y * (float)flow_h - 0.5f;
+        int fy0 = (int)std::floor(fy_f);
+        if (fy0 < 0) fy0 = 0;
+        if (fy0 > flow_h - 2) fy0 = flow_h - 2;
+        int fy1 = fy0 + 1;
+        float wy1 = fy_f - (float)fy0;
+        float wy0 = 1.0f - wy1;
+
+        float* out_row = dst + y * d_stride;
+
+        for (int x = 0; x < pw; x++) {
+            float norm_x = ((float)x + 0.5f) / (float)pw;
+            float fx_f = norm_x * (float)flow_w - 0.5f;
+            int fx0 = (int)std::floor(fx_f);
+            if (fx0 < 0) fx0 = 0;
+            if (fx0 > flow_w - 2) fx0 = flow_w - 2;
+            int fx1 = fx0 + 1;
+            float wx1 = fx_f - (float)fx0;
+            float wx0 = 1.0f - wx1;
+
+            ptrdiff_t idx00 = (ptrdiff_t)fy0 * flow_stride + fx0;
+            ptrdiff_t idx01 = (ptrdiff_t)fy0 * flow_stride + fx1;
+            ptrdiff_t idx10 = (ptrdiff_t)fy1 * flow_stride + fx0;
+            ptrdiff_t idx11 = (ptrdiff_t)fy1 * flow_stride + fx1;
+
+            float dx = (flow_p0[idx00] * wx0 + flow_p0[idx01] * wx1) * wy0 +
+                       (flow_p0[idx10] * wx0 + flow_p0[idx11] * wx1) * wy1;
+            float dy = (flow_p1[idx00] * wx0 + flow_p1[idx01] * wx1) * wy0 +
+                       (flow_p1[idx10] * wx0 + flow_p1[idx11] * wx1) * wy1;
+            float mask = (flow_p2[idx00] * wx0 + flow_p2[idx01] * wx1) * wy0 +
+                         (flow_p2[idx10] * wx0 + flow_p2[idx11] * wx1) * wy1;
+
+            float sx0 = (float)x + dx * scale_x;
+            float sy0 = (float)y + dy * scale_y;
+            float sx1 = (float)x - dx * scale_x;
+            float sy1 = (float)y - dy * scale_y;
+
+            int ix0 = (int)std::floor(sx0);
+            int iy0 = (int)std::floor(sy0);
+            if (ix0 < 0) ix0 = 0;
+            if (ix0 > pw - 2) ix0 = pw - 2;
+            if (iy0 < 0) iy0 = 0;
+            if (iy0 > ph - 2) iy0 = ph - 2;
+            float qx1 = sx0 - (float)ix0; float qx0 = 1.0f - qx1;
+            float qy1 = sy0 - (float)iy0; float qy0 = 1.0f - qy1;
+
+            const float* p0 = src0 + (ptrdiff_t)iy0 * s_stride + ix0;
+            float c0 = (p0[0] * qx0 + p0[1] * qx1) * qy0 +
+                       (p0[s_stride] * qx0 + p0[s_stride + 1] * qx1) * qy1;
+
+            int ix1 = (int)std::floor(sx1);
+            int iy1 = (int)std::floor(sy1);
+            if (ix1 < 0) ix1 = 0;
+            if (ix1 > pw - 2) ix1 = pw - 2;
+            if (iy1 < 0) iy1 = 0;
+            if (iy1 > ph - 2) iy1 = ph - 2;
+            float rx1 = sx1 - (float)ix1; float rx0 = 1.0f - rx1;
+            float ry1 = sy1 - (float)iy1; float ry0 = 1.0f - ry1;
+
+            const float* p1 = src1 + (ptrdiff_t)iy1 * s_stride + ix1;
+            float c1 = (p1[0] * rx0 + p1[1] * rx1) * ry0 +
+                       (p1[s_stride] * rx0 + p1[s_stride + 1] * rx1) * ry1;
+
+            if (mask < 0.0f) mask = 0.0f;
+            if (mask > 1.0f) mask = 1.0f;
+            out_row[x] = c0 * mask + c1 * (1.0f - mask);
+        }
+    }
+}
 
 static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* instanceData, void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
     FastWarpData* d = static_cast<FastWarpData*>(instanceData);
@@ -20,50 +189,56 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
         vsapi->requestFrameFilter(n, d->node0, frameCtx);
         vsapi->requestFrameFilter(n, d->node1, frameCtx);
         vsapi->requestFrameFilter(n, d->nodeFlow, frameCtx);
-        vsapi->requestFrameFilter(n, d->nodeMask, frameCtx);
         return nullptr;
     } else if (activationReason == arAllFramesReady) {
         const VSFrame* src0 = vsapi->getFrameFilter(n, d->node0, frameCtx);
         const VSFrame* src1 = vsapi->getFrameFilter(n, d->node1, frameCtx);
         const VSFrame* flow = vsapi->getFrameFilter(n, d->nodeFlow, frameCtx);
-        const VSFrame* mask = vsapi->getFrameFilter(n, d->nodeMask, frameCtx);
 
         VSFrame* dst = vsapi->newVideoFrame(&d->vi->format, d->vi->width, d->vi->height, src0, core);
 
-        int width = d->vi->width;
-        int height = d->vi->height;
         int flow_w = vsapi->getFrameWidth(flow, 0);
         int flow_h = vsapi->getFrameHeight(flow, 0);
+        ptrdiff_t flow_stride = vsapi->getStride(flow, 0) / sizeof(float);
 
-        const float* r0 = reinterpret_cast<const float*>(vsapi->getReadPtr(src0, 0));
-        const float* g0 = reinterpret_cast<const float*>(vsapi->getReadPtr(src0, 1));
-        const float* b0 = reinterpret_cast<const float*>(vsapi->getReadPtr(src0, 2));
+        const float* flow_p0 = reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 0));
+        const float* flow_p1 = reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 1));
+        const float* flow_p2 = reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 2));
 
-        const float* r1 = reinterpret_cast<const float*>(vsapi->getReadPtr(src1, 0));
-        const float* g1 = reinterpret_cast<const float*>(vsapi->getReadPtr(src1, 1));
-        const float* b1 = reinterpret_cast<const float*>(vsapi->getReadPtr(src1, 2));
+        for (int p = 0; p < d->vi->format.numPlanes; p++) {
+            int pw = vsapi->getFrameWidth(src0, p);
+            int ph = vsapi->getFrameHeight(src0, p);
+            ptrdiff_t s_stride = vsapi->getStride(src0, p);
+            ptrdiff_t d_stride = vsapi->getStride(dst, p);
 
-        const float* flow_ptr = reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 0));
-        const float* mask_ptr = reinterpret_cast<const float*>(vsapi->getReadPtr(mask, 0));
+            const uint8_t* s0 = vsapi->getReadPtr(src0, p);
+            const uint8_t* s1 = vsapi->getReadPtr(src1, p);
+            uint8_t* d_ptr = vsapi->getWritePtr(dst, p);
 
-        float* dst_r = reinterpret_cast<float*>(vsapi->getWritePtr(dst, 0));
-        float* dst_g = reinterpret_cast<float*>(vsapi->getWritePtr(dst, 1));
-        float* dst_b = reinterpret_cast<float*>(vsapi->getWritePtr(dst, 2));
-
-        // Call hardware Vulkan bilinear compute shader warp
-        bool ok = d->warper->warp(
-            r0, g0, b0,
-            r1, g1, b1,
-            width, height,
-            flow_ptr, flow_w, flow_h,
-            mask_ptr,
-            dst_r, dst_g, dst_b
-        );
+            if (d->vi->format.sampleType == stInteger && d->vi->format.bytesPerSample == 1) {
+                warp_plane_uint8(
+                    s0, s1, d_ptr,
+                    pw, ph, s_stride, d_stride,
+                    flow_p0, flow_p1, flow_p2,
+                    flow_w, flow_h, flow_stride
+                );
+            } else if (d->vi->format.sampleType == stFloat && d->vi->format.bytesPerSample == 4) {
+                warp_plane_float(
+                    reinterpret_cast<const float*>(s0),
+                    reinterpret_cast<const float*>(s1),
+                    reinterpret_cast<float*>(d_ptr),
+                    pw, ph,
+                    s_stride / sizeof(float),
+                    d_stride / sizeof(float),
+                    flow_p0, flow_p1, flow_p2,
+                    flow_w, flow_h, flow_stride
+                );
+            }
+        }
 
         vsapi->freeFrame(src0);
         vsapi->freeFrame(src1);
         vsapi->freeFrame(flow);
-        vsapi->freeFrame(mask);
 
         return dst;
     }
@@ -75,7 +250,6 @@ static void VS_CC fastwarpFree(void* instanceData, VSCore* core, const VSAPI* vs
     vsapi->freeNode(d->node0);
     vsapi->freeNode(d->node1);
     vsapi->freeNode(d->nodeFlow);
-    vsapi->freeNode(d->nodeMask);
     delete d;
 }
 
@@ -84,26 +258,18 @@ static void VS_CC fastwarpCreate(const VSMap* in, VSMap* out, void* userData, VS
     d->node0 = vsapi->mapGetNode(in, "clip0", 0, nullptr);
     d->node1 = vsapi->mapGetNode(in, "clip1", 0, nullptr);
     d->nodeFlow = vsapi->mapGetNode(in, "flow", 0, nullptr);
-    d->nodeMask = vsapi->mapGetNode(in, "mask", 0, nullptr);
     d->vi = vsapi->getVideoInfo(d->node0);
-
-    d->warper = std::make_unique<VulkanWarper>();
-    if (!d->warper->init(0)) {
-        vsapi->mapSetError(out, "FastWarp: Failed to initialize Vulkan compute device.");
-        return;
-    }
 
     VSFilterDependency deps[] = {
         { d->node0, rpStrictSpatial },
         { d->node1, rpStrictSpatial },
-        { d->nodeFlow, rpStrictSpatial },
-        { d->nodeMask, rpStrictSpatial }
+        { d->nodeFlow, rpStrictSpatial }
     };
 
-    vsapi->createVideoFilter(out, "Warp", d->vi, fastwarpGetFrame, fastwarpFree, fmParallel, deps, 4, d.release(), core);
+    vsapi->createVideoFilter(out, "Warp", d->vi, fastwarpGetFrame, fastwarpFree, fmParallel, deps, 3, d.release(), core);
 }
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
-    vspapi->configPlugin("com.skycine.fastwarp", "fastwarp", "SkyCine Hardware Vulkan Warper", VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
-    vspapi->registerFunction("Warp", "clip0:vnode;clip1:vnode;flow:vnode;mask:vnode;", "clip:vnode;", fastwarpCreate, nullptr, plugin);
+    vspapi->configPlugin("com.skycine.fastwarp", "fastwarp", "SkyCine Bilinear Flow Warper", VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->registerFunction("Warp", "clip0:vnode;clip1:vnode;flow:vnode;", "clip:vnode;", fastwarpCreate, nullptr, plugin);
 }

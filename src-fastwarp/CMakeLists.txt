@@ -4,22 +4,23 @@ project(fastwarp LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Vulkan REQUIRED)
+find_package(OpenMP)
 
 add_library(fastwarp SHARED
     plugin.cpp
-    vulkan_warper.cpp
-    vulkan_warper.h
 )
 
 target_include_directories(fastwarp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${Vulkan_INCLUDE_DIRS}
 )
 
-target_link_libraries(fastwarp PRIVATE
-    Vulkan::Vulkan
-)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(fastwarp PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
+if(MSVC)
+    target_compile_options(fastwarp PRIVATE /O2 /Oi /Ot /arch:AVX2 /fp:fast)
+endif()
 
 set_target_properties(fastwarp PROPERTIES
     PREFIX ""
