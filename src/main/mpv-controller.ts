@@ -521,9 +521,8 @@ export class MpvController extends EventEmitter {
 
     if (seq !== this.rifeApplySequence) return;
 
-    const scaleFilter = is4K
-      ? 'scale=w=1280:h=-2:flags=fast_bilinear'
-      : 'scale=w="min(1920,iw)":h=-2:flags=fast_bilinear';
+    // In FastWarp GPU mode, 4K is processed in native full resolution (up to 3840x2160)
+    const scaleFilter = 'scale=w="min(3840,iw)":h=-2:flags=fast_bilinear';
 
     console.log(`[MPV Controller] 🎯 RIFE video scale configured: is4K=${is4K}, fps=${detectedFps}, filter=${scaleFilter}`);
 

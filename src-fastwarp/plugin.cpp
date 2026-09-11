@@ -1,10 +1,11 @@
-﻿#ifdef _WIN32
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #endif
 
 #include <VapourSynth4.h>
 #include <VSHelper4.h>
+#include "vulkan_warper.h"
 #include <memory>
 #include <vector>
 #include <cmath>
@@ -16,266 +17,9 @@ struct FastWarpData {
     VSNode* node1;
     VSNode* nodeFlow;
     const VSVideoInfo* vi;
+    std::unique_ptr<VulkanWarper> warper;
+    float time_step;
 };
-
-struct XMap {
-    int fx0;
-    int fx1;
-    float wx0;
-    float wx1;
-};
-
-struct YMap {
-    int fy0;
-    int fy1;
-    float wy0;
-    float wy1;
-    ptrdiff_t row0;
-    ptrdiff_t row1;
-};
-
-static inline void warp_plane_uint8(
-    const uint8_t* src0, const uint8_t* src1, uint8_t* dst,
-    int pw, int ph, ptrdiff_t s_stride, ptrdiff_t d_stride,
-    const float* flow_p0, const float* flow_p1, const float* flow_p2,
-    int flow_w, int flow_h, ptrdiff_t flow_stride
-) {
-    const float scale_x = (float)pw / (float)flow_w;
-    const float scale_y = (float)ph / (float)flow_h;
-
-    // Precompute X and Y mappings (L1 cache friendly)
-    std::vector<XMap> xmap(pw);
-    for (int x = 0; x < pw; x++) {
-        float norm_x = ((float)x + 0.5f) / (float)pw;
-        if (norm_x < 0.0f) norm_x = 0.0f;
-        if (norm_x > 1.0f) norm_x = 1.0f;
-        float fx_f = norm_x * (float)(flow_w - 1);
-        int fx0 = (int)fx_f;
-        if (fx0 > flow_w - 2) fx0 = flow_w - 2;
-        xmap[x].fx0 = fx0;
-        xmap[x].fx1 = fx0 + 1;
-        float wx1 = fx_f - (float)fx0;
-        xmap[x].wx1 = wx1;
-        xmap[x].wx0 = 1.0f - wx1;
-    }
-
-    std::vector<YMap> ymap(ph);
-    for (int y = 0; y < ph; y++) {
-        float norm_y = ((float)y + 0.5f) / (float)ph;
-        if (norm_y < 0.0f) norm_y = 0.0f;
-        if (norm_y > 1.0f) norm_y = 1.0f;
-        float fy_f = norm_y * (float)(flow_h - 1);
-        int fy0 = (int)fy_f;
-        if (fy0 > flow_h - 2) fy0 = flow_h - 2;
-        ymap[y].fy0 = fy0;
-        ymap[y].fy1 = fy0 + 1;
-        float wy1 = fy_f - (float)fy0;
-        ymap[y].wy1 = wy1;
-        ymap[y].wy0 = 1.0f - wy1;
-        ymap[y].row0 = (ptrdiff_t)fy0 * flow_stride;
-        ymap[y].row1 = (ptrdiff_t)(fy0 + 1) * flow_stride;
-    }
-
-    const float max_x = (float)(pw - 1);
-    const float max_y = (float)(ph - 1);
-    const int max_ix = pw - 2;
-    const int max_iy = ph - 2;
-
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < ph; y++) {
-        const auto& ym = ymap[y];
-        const ptrdiff_t r0 = ym.row0;
-        const ptrdiff_t r1 = ym.row1;
-        const float wy0 = ym.wy0;
-        const float wy1 = ym.wy1;
-
-        uint8_t* out_row = dst + y * d_stride;
-
-        for (int x = 0; x < pw; x++) {
-            const auto& xm = xmap[x];
-            const int fx0 = xm.fx0;
-            const int fx1 = xm.fx1;
-            const float wx0 = xm.wx0;
-            const float wx1 = xm.wx1;
-
-            const ptrdiff_t i00 = r0 + fx0;
-            const ptrdiff_t i01 = r0 + fx1;
-            const ptrdiff_t i10 = r1 + fx0;
-            const ptrdiff_t i11 = r1 + fx1;
-
-            float dx = (flow_p0[i00] * wx0 + flow_p0[i01] * wx1) * wy0 +
-                       (flow_p0[i10] * wx0 + flow_p0[i11] * wx1) * wy1;
-            float dy = (flow_p1[i00] * wx0 + flow_p1[i01] * wx1) * wy0 +
-                       (flow_p1[i10] * wx0 + flow_p1[i11] * wx1) * wy1;
-            float mask = flow_p2 ? ((flow_p2[i00] * wx0 + flow_p2[i01] * wx1) * wy0 +
-                                   (flow_p2[i10] * wx0 + flow_p2[i11] * wx1) * wy1) : 0.5f;
-
-            float sx0 = (float)x + dx * scale_x;
-            float sy0 = (float)y + dy * scale_y;
-            float sx1 = (float)x - dx * scale_x;
-            float sy1 = (float)y - dy * scale_y;
-
-            if (sx0 < 0.0f) sx0 = 0.0f;
-            if (sx0 > max_x) sx0 = max_x;
-            if (sy0 < 0.0f) sy0 = 0.0f;
-            if (sy0 > max_y) sy0 = max_y;
-
-            int ix0 = (int)sx0;
-            if (ix0 > max_ix) ix0 = max_ix;
-            int iy0 = (int)sy0;
-            if (iy0 > max_iy) iy0 = max_iy;
-            float qx1 = sx0 - (float)ix0; float qx0 = 1.0f - qx1;
-            float qy1 = sy0 - (float)iy0; float qy0 = 1.0f - qy1;
-
-            const uint8_t* p0 = src0 + (ptrdiff_t)iy0 * s_stride + ix0;
-            float c0 = ((float)p0[0] * qx0 + (float)p0[1] * qx1) * qy0 +
-                       ((float)p0[s_stride] * qx0 + (float)p0[s_stride + 1] * qx1) * qy1;
-
-            if (sx1 < 0.0f) sx1 = 0.0f;
-            if (sx1 > max_x) sx1 = max_x;
-            if (sy1 < 0.0f) sy1 = 0.0f;
-            if (sy1 > max_y) sy1 = max_y;
-
-            int ix1 = (int)sx1;
-            if (ix1 > max_ix) ix1 = max_ix;
-            int iy1 = (int)sy1;
-            if (iy1 > max_iy) iy1 = max_iy;
-            float rx1 = sx1 - (float)ix1; float rx0 = 1.0f - rx1;
-            float ry1 = sy1 - (float)iy1; float ry0 = 1.0f - ry1;
-
-            const uint8_t* p1 = src1 + (ptrdiff_t)iy1 * s_stride + ix1;
-            float c1 = ((float)p1[0] * rx0 + (float)p1[1] * rx1) * ry0 +
-                       ((float)p1[s_stride] * rx0 + (float)p1[s_stride + 1] * rx1) * ry1;
-
-            if (mask < 0.0f) mask = 0.0f;
-            if (mask > 1.0f) mask = 1.0f;
-            float val = c0 * mask + c1 * (1.0f - mask);
-            int ival = (int)(val + 0.5f);
-            if (ival < 0) ival = 0;
-            if (ival > 255) ival = 255;
-            out_row[x] = (uint8_t)ival;
-        }
-    }
-}
-
-static inline void warp_plane_float(
-    const float* src0, const float* src1, float* dst,
-    int pw, int ph, ptrdiff_t s_stride, ptrdiff_t d_stride,
-    const float* flow_p0, const float* flow_p1, const float* flow_p2,
-    int flow_w, int flow_h, ptrdiff_t flow_stride
-) {
-    const float scale_x = (float)pw / (float)flow_w;
-    const float scale_y = (float)ph / (float)flow_h;
-
-    std::vector<XMap> xmap(pw);
-    for (int x = 0; x < pw; x++) {
-        float norm_x = ((float)x + 0.5f) / (float)pw;
-        if (norm_x < 0.0f) norm_x = 0.0f;
-        if (norm_x > 1.0f) norm_x = 1.0f;
-        float fx_f = norm_x * (float)(flow_w - 1);
-        int fx0 = (int)fx_f;
-        if (fx0 > flow_w - 2) fx0 = flow_w - 2;
-        xmap[x].fx0 = fx0;
-        xmap[x].fx1 = fx0 + 1;
-        float wx1 = fx_f - (float)fx0;
-        xmap[x].wx1 = wx1;
-        xmap[x].wx0 = 1.0f - wx1;
-    }
-
-    std::vector<YMap> ymap(ph);
-    for (int y = 0; y < ph; y++) {
-        float norm_y = ((float)y + 0.5f) / (float)ph;
-        if (norm_y < 0.0f) norm_y = 0.0f;
-        if (norm_y > 1.0f) norm_y = 1.0f;
-        float fy_f = norm_y * (float)(flow_h - 1);
-        int fy0 = (int)fy_f;
-        if (fy0 > flow_h - 2) fy0 = flow_h - 2;
-        ymap[y].fy0 = fy0;
-        ymap[y].fy1 = fy0 + 1;
-        float wy1 = fy_f - (float)fy0;
-        ymap[y].wy1 = wy1;
-        ymap[y].wy0 = 1.0f - wy1;
-        ymap[y].row0 = (ptrdiff_t)fy0 * flow_stride;
-        ymap[y].row1 = (ptrdiff_t)(fy0 + 1) * flow_stride;
-    }
-
-    const float max_x = (float)(pw - 1);
-    const float max_y = (float)(ph - 1);
-    const int max_ix = pw - 2;
-    const int max_iy = ph - 2;
-
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < ph; y++) {
-        const auto& ym = ymap[y];
-        const ptrdiff_t r0 = ym.row0;
-        const ptrdiff_t r1 = ym.row1;
-        const float wy0 = ym.wy0;
-        const float wy1 = ym.wy1;
-
-        float* out_row = dst + y * d_stride;
-
-        for (int x = 0; x < pw; x++) {
-            const auto& xm = xmap[x];
-            const int fx0 = xm.fx0;
-            const int fx1 = xm.fx1;
-            const float wx0 = xm.wx0;
-            const float wx1 = xm.wx1;
-
-            const ptrdiff_t i00 = r0 + fx0;
-            const ptrdiff_t i01 = r0 + fx1;
-            const ptrdiff_t i10 = r1 + fx0;
-            const ptrdiff_t i11 = r1 + fx1;
-
-            float dx = (flow_p0[i00] * wx0 + flow_p0[i01] * wx1) * wy0 +
-                       (flow_p0[i10] * wx0 + flow_p0[i11] * wx1) * wy1;
-            float dy = (flow_p1[i00] * wx0 + flow_p1[i01] * wx1) * wy0 +
-                       (flow_p1[i10] * wx0 + flow_p1[i11] * wx1) * wy1;
-            float mask = flow_p2 ? ((flow_p2[i00] * wx0 + flow_p2[i01] * wx1) * wy0 +
-                                   (flow_p2[i10] * wx0 + flow_p2[i11] * wx1) * wy0) : 0.5f;
-
-            float sx0 = (float)x + dx * scale_x;
-            float sy0 = (float)y + dy * scale_y;
-            float sx1 = (float)x - dx * scale_x;
-            float sy1 = (float)y - dy * scale_y;
-
-            if (sx0 < 0.0f) sx0 = 0.0f;
-            if (sx0 > max_x) sx0 = max_x;
-            if (sy0 < 0.0f) sy0 = 0.0f;
-            if (sy0 > max_y) sy0 = max_y;
-
-            int ix0 = (int)sx0;
-            if (ix0 > max_ix) ix0 = max_ix;
-            int iy0 = (int)sy0;
-            if (iy0 > max_iy) iy0 = max_iy;
-            float qx1 = sx0 - (float)ix0; float qx0 = 1.0f - qx1;
-            float qy1 = sy0 - (float)iy0; float qy0 = 1.0f - qy1;
-
-            const float* p0 = src0 + (ptrdiff_t)iy0 * s_stride + ix0;
-            float c0 = (p0[0] * qx0 + p0[1] * qx1) * qy0 +
-                       (p0[s_stride] * qx0 + p0[s_stride + 1] * qx1) * qy1;
-
-            if (sx1 < 0.0f) sx1 = 0.0f;
-            if (sx1 > max_x) sx1 = max_x;
-            if (sy1 < 0.0f) sy1 = 0.0f;
-            if (sy1 > max_y) sy1 = max_y;
-
-            int ix1 = (int)sx1;
-            if (ix1 > max_ix) ix1 = max_ix;
-            int iy1 = (int)sy1;
-            if (iy1 > max_iy) iy1 = max_iy;
-            float rx1 = sx1 - (float)ix1; float rx0 = 1.0f - rx1;
-            float ry1 = sy1 - (float)iy1; float ry0 = 1.0f - ry1;
-
-            const float* p1 = src1 + (ptrdiff_t)iy1 * s_stride + ix1;
-            float c1 = (p1[0] * rx0 + p1[1] * rx1) * ry0 +
-                       (p1[s_stride] * rx0 + p1[s_stride + 1] * rx1) * ry1;
-
-            if (mask < 0.0f) mask = 0.0f;
-            if (mask > 1.0f) mask = 1.0f;
-            out_row[x] = c0 * mask + c1 * (1.0f - mask);
-        }
-    }
-}
 
 static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* instanceData, void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
     FastWarpData* d = static_cast<FastWarpData*>(instanceData);
@@ -313,24 +57,21 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
             const uint8_t* s1 = vsapi->getReadPtr(src1, p);
             uint8_t* d_ptr = vsapi->getWritePtr(dst, p);
 
-            if (d->vi->format.sampleType == stInteger && d->vi->format.bytesPerSample == 1) {
-                warp_plane_uint8(
-                    s0, s1, d_ptr,
-                    pw, ph, s_stride, d_stride,
-                    flow_p0, flow_p1, flow_p2,
-                    flow_w, flow_h, flow_stride
-                );
-            } else if (d->vi->format.sampleType == stFloat && d->vi->format.bytesPerSample == 4) {
-                warp_plane_float(
-                    reinterpret_cast<const float*>(s0),
-                    reinterpret_cast<const float*>(s1),
-                    reinterpret_cast<float*>(d_ptr),
-                    pw, ph,
-                    s_stride / sizeof(float),
-                    d_stride / sizeof(float),
-                    flow_p0, flow_p1, flow_p2,
-                    flow_w, flow_h, flow_stride
-                );
+            bool ok = d->warper->warp_plane(
+                s0, s1, d_ptr,
+                pw, ph, s_stride, d_stride,
+                flow_p0, flow_p1, flow_p2,
+                flow_w, flow_h, flow_stride,
+                d->time_step
+            );
+
+            if (!ok) {
+                vsapi->setFilterError("FastWarp: Vulkan GPU execution failed during frame dispatch", frameCtx);
+                vsapi->freeFrame(dst);
+                vsapi->freeFrame(src0);
+                vsapi->freeFrame(src1);
+                vsapi->freeFrame(flow);
+                return nullptr;
             }
         }
 
@@ -376,23 +117,41 @@ static void VS_CC fastwarpCreate(const VSMap* in, VSMap* out, void* userData, VS
         return;
     }
 
+    float time_step = (float)vsapi->mapGetFloat(in, "time_step", 0, &err);
+    if (err) time_step = 0.5f;
+
+    int gpu_id = int64ToIntS(vsapi->mapGetInt(in, "gpu_id", 0, &err));
+    if (err) gpu_id = 0;
+
     const VSVideoInfo* vi_src = vsapi->getVideoInfo(node0);
+    const VSVideoInfo* vi_flow = vsapi->getVideoInfo(nodeFlow);
+
+    // Strictly enforce Vulkan GPU Compute Shader (No CPU fallback)
+    auto warper = std::make_unique<VulkanWarper>();
+    if (!warper->init(gpu_id, vi_src->width, vi_src->height, vi_flow->width, vi_flow->height)) {
+        vsapi->freeNode(node0);
+        vsapi->freeNode(node1);
+        vsapi->freeNode(nodeFlow);
+        vsapi->mapSetError(out, "FastWarp: Failed to initialize Vulkan GPU Compute device! Vulkan-capable GPU is strictly required.");
+        return;
+    }
 
     auto d = std::make_unique<FastWarpData>();
     d->node0 = node0;
     d->node1 = node1;
     d->nodeFlow = nodeFlow;
     d->vi = vi_src;
+    d->warper = std::move(warper);
+    d->time_step = time_step;
 
     vsapi->createVideoFilter(out, "Warp", vi_src, fastwarpGetFrame, fastwarpFree, fmParallel, nullptr, 0, d.release(), core);
 }
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
 #ifdef _WIN32
-    SetEnvironmentVariableW(L"OMP_WAIT_POLICY", L"passive");
     HMODULE hMod = NULL;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, (LPCWSTR)VapourSynthPluginInit2, &hMod);
 #endif
-    vspapi->configPlugin("com.skycine.fastwarp", "fastwarp", "SkyCine Bilinear Flow Warper", VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
-    vspapi->registerFunction("Warp", "clip0:vnode;clip1:vnode;flow:vnode;", "clip:vnode;", fastwarpCreate, nullptr, plugin);
+    vspapi->configPlugin("com.skycine.fastwarp", "fastwarp", "SkyCine GPU Vulkan Flow Warper", VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->registerFunction("Warp", "clip0:vnode;clip1:vnode;flow:vnode;time_step:float:opt;gpu_id:int:opt;", "clip:vnode;", fastwarpCreate, nullptr, plugin);
 }

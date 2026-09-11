@@ -1,0 +1,41 @@
+#version 450
+layout (local_size_x = 16, local_size_y = 16) in;
+
+layout (binding = 0) uniform sampler2D tex0;
+layout (binding = 1) uniform sampler2D tex1;
+layout (binding = 2) uniform sampler2D flow_tex; // R = dx, G = dy, B = mask
+
+layout (binding = 3, r8) uniform writeonly image2D out_plane;
+
+layout (push_constant) uniform PushConstants {
+    vec2 out_size;   // Output plane resolution (e.g. 3840, 2160 for Y or 1920, 1080 for U/V)
+    vec2 flow_size;  // Optical flow map resolution (e.g. 640, 360)
+    float time_step; // Interpolation factor (0.5 for 2x, 0.3333 or 0.6666 for 3x)
+} pc;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (pos.x >= int(pc.out_size.x) || pos.y >= int(pc.out_size.y)) {
+        return;
+    }
+
+    // Normalized UV coordinates at center of target pixel [0.0 .. 1.0]
+    vec2 uv = (vec2(pos) + 0.5) / pc.out_size;
+
+    // Sample optical flow vectors and occlusion mask from neural flow texture
+    vec4 flow = texture(flow_tex, uv);
+    vec2 disp = flow.xy / pc.flow_size;
+    float mask = clamp(flow.z, 0.0, 1.0);
+
+    // Hardware-accelerated bilinear sampling along forward and backward trajectories
+    vec2 uv0 = uv + disp * pc.time_step;
+    vec2 uv1 = uv - disp * (1.0 - pc.time_step);
+
+    float c0 = texture(tex0, uv0).r;
+    float c1 = texture(tex1, uv1).r;
+
+    // Blend according to occlusion visibility mask
+    float blended = c0 * mask + c1 * (1.0 - mask);
+
+    imageStore(out_plane, pos, vec4(blended, 0.0, 0.0, 1.0));
+}

@@ -20,6 +20,10 @@ jobs:
         with:
           cache: true
 
+      - name: Compile Compute Shader to SPIR-V Header
+        run: |
+          glslangValidator -V src-fastwarp/warp_yuv.comp -o src-fastwarp/warp_spv.h --vn warp_spv
+
       - name: Configure CMake
         run: |
           cmake -B build-fastwarp -S src-fastwarp -DCMAKE_BUILD_TYPE=Release

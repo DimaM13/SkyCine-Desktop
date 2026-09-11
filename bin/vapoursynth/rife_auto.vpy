@@ -121,15 +121,9 @@ else:
     # If video resolution exceeds 1080p, downscale to a 720p base while strictly preserving
     # the exact aspect ratio and aligning to multiples of 32 for optimal GPU tensor alignment.
     is_4k = (w > 1920 or h > 1080 or is_4k_hint)
-    if w > 1920 or h > 1080:
-        scale_4k = min(1280.0 / w, 720.0 / h)
-        base_w = int(round((w * scale_4k) / 32)) * 32
-        base_h = int(round((h * scale_4k) / 32)) * 32
-        base_clip = core.resize.Bilinear(clip, width=base_w, height=base_h, format=vs.YUV420P8)
-    else:
-        base_w = w
-        base_h = h
-        base_clip = clip
+    base_w = w
+    base_h = h
+    base_clip = clip
 
     # 4. Determine optical flow resolution
     res_map = {
@@ -199,12 +193,12 @@ else:
     if factor == 3:
         flow1 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=1)
         flow2 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=2)
-        gen1_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow1)
-        gen2_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow2)
+        gen1_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow1, time_step=0.333333)
+        gen2_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow2, time_step=0.666667)
         out = core.std.Interleave([clip0, gen1_native, gen2_native]) + base_clip[-1]
     else:
         odd_flow = core.std.SelectEvery(interpolated_rgb, cycle=2, offsets=1)
-        gen_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=odd_flow)
+        gen_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=odd_flow, time_step=0.5)
         out = core.std.Interleave([clip0, gen_native]) + base_clip[-1]
 
     out.set_output()
