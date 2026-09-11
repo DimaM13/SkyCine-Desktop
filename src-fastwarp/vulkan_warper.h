@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstddef>
+#include <mutex>
 
 struct PlaneInfo {
     const uint8_t* s0;
@@ -98,6 +99,7 @@ private:
     VkDeviceMemory stagingDownloadMem = VK_NULL_HANDLE;
     void* stagingDownloadMapped = nullptr;
     bool downloadIsCached = false;
+    std::mutex m_mutex;
 
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
     bool createImage(uint32_t w, uint32_t h, VkFormat format, VkImageUsageFlags usage, VkImage& image, VkDeviceMemory& memory);

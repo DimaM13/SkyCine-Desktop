@@ -149,7 +149,7 @@ static void VS_CC fastwarpCreate(const VSMap* in, VSMap* out, void* userData, VS
     d->warper = std::move(warper);
     d->time_step = time_step;
 
-    vsapi->createVideoFilter(out, "Warp", vi_src, fastwarpGetFrame, fastwarpFree, fmParallel, nullptr, 0, d.release(), core);
+    vsapi->createVideoFilter(out, "Warp", vi_src, fastwarpGetFrame, fastwarpFree, fmUnordered, nullptr, 0, d.release(), core);
 }
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {

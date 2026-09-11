@@ -7,7 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_definitions(-DVS_USE_LATEST_API)
 
 find_package(Vulkan REQUIRED)
-find_package(OpenMP)
 
 find_program(GLSLANG_VALIDATOR glslangValidator HINTS $ENV{VULKAN_SDK}/bin $ENV{VULKAN_SDK}/Bin)
 if(GLSLANG_VALIDATOR)
@@ -33,10 +32,6 @@ target_include_directories(fastwarp PRIVATE
 target_link_libraries(fastwarp PRIVATE
     Vulkan::Vulkan
 )
-
-if(OpenMP_CXX_FOUND)
-    target_link_libraries(fastwarp PRIVATE OpenMP::OpenMP_CXX)
-endif()
 
 if(MSVC)
     target_compile_options(fastwarp PRIVATE /O2 /Oi /Ot /fp:fast)

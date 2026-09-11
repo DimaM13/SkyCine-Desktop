@@ -18,7 +18,6 @@ struct PushConstants {
 
 // Ultra-fast streaming load for PCIe / Write-Combined mapped memory
 static inline void fast_copy_from_gpu(uint8_t* dst, const uint8_t* src, int pw, int ph, ptrdiff_t d_stride) {
-    #pragma omp parallel for schedule(static)
     for (int r = 0; r < ph; r++) {
         const uint8_t* s_row = src + (size_t)r * pw;
         uint8_t* d_row = dst + r * d_stride;
@@ -493,6 +492,7 @@ bool VulkanWarper::warp_frame_yuv420(
     float time_step
 ) {
     if (!device || !stagingUploadMapped || !stagingDownloadMapped) return false;
+    std::lock_guard<std::mutex> lock(m_mutex);
 
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &fence);
@@ -526,7 +526,6 @@ bool VulkanWarper::warp_frame_yuv420(
 
     // 3. Pack Flow
     float* upload_flow = reinterpret_cast<float*>(up1 + frame_bytes);
-    #pragma omp parallel for schedule(static)
     for (int r = 0; r < flow.h; r++) {
         const float* r0 = flow.p0 + r * flow.stride;
         const float* r1 = flow.p1 + r * flow.stride;

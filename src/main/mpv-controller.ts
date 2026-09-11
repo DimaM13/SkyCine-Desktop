@@ -530,7 +530,7 @@ export class MpvController extends EventEmitter {
     const vfChain = [
       `@scale_${timestamp}:${scaleFilter}`,
       'format=yuv420p',
-      `@vs_${timestamp}:vapoursynth="${scriptPath}":concurrent-frames=2`
+      `@vs_${timestamp}:vapoursynth="${scriptPath}":concurrent-frames=1`
     ].join(',');
 
     if (seq !== this.rifeApplySequence) return;
