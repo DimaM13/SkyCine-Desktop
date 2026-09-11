@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cstring>
 #include <vector>
+#include <emmintrin.h>
+#include <smmintrin.h>
 
 struct PushConstants {
     float out_w;
@@ -13,6 +15,33 @@ struct PushConstants {
     float time_step;
     float pad;
 };
+
+// Ultra-fast streaming load for PCIe / Write-Combined mapped memory
+static inline void fast_copy_from_gpu(uint8_t* dst, const uint8_t* src, int pw, int ph, ptrdiff_t d_stride) {
+    #pragma omp parallel for schedule(static)
+    for (int r = 0; r < ph; r++) {
+        const uint8_t* s_row = src + (size_t)r * pw;
+        uint8_t* d_row = dst + r * d_stride;
+
+        if (((uintptr_t)s_row & 15) == 0) {
+            size_t n16 = (size_t)pw / 16;
+            const __m128i* s16 = reinterpret_cast<const __m128i*>(s_row);
+            __m128i* d16 = reinterpret_cast<__m128i*>(d_row);
+
+            for (size_t i = 0; i < n16; i++) {
+                __m128i val = _mm_stream_load_si128(const_cast<__m128i*>(s16 + i));
+                _mm_storeu_si128(d16 + i, val);
+            }
+
+            size_t rem = (size_t)pw % 16;
+            if (rem > 0) {
+                std::memcpy(d_row + n16 * 16, s_row + n16 * 16, rem);
+            }
+        } else {
+            std::memcpy(d_row, s_row, pw);
+        }
+    }
+}
 
 VulkanWarper::VulkanWarper() {}
 
@@ -86,7 +115,7 @@ uint32_t VulkanWarper::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags
             return i;
         }
     }
-    return 0;
+    return UINT32_MAX;
 }
 
 bool VulkanWarper::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
@@ -101,10 +130,13 @@ bool VulkanWarper::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkM
     VkMemoryRequirements memReq;
     vkGetBufferMemoryRequirements(device, buffer, &memReq);
 
+    uint32_t memType = findMemoryType(memReq.memoryTypeBits, properties);
+    if (memType == UINT32_MAX) return false;
+
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memReq.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, properties);
+    allocInfo.memoryTypeIndex = memType;
 
     if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) return false;
     vkBindBufferMemory(device, buffer, bufferMemory, 0);
@@ -132,10 +164,13 @@ bool VulkanWarper::createImage(uint32_t w, uint32_t h, VkFormat format, VkImageU
     VkMemoryRequirements memReq;
     vkGetImageMemoryRequirements(device, image, &memReq);
 
+    uint32_t memType = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memType == UINT32_MAX) return false;
+
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memReq.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    allocInfo.memoryTypeIndex = memType;
 
     if (vkAllocateMemory(device, &allocInfo, nullptr, &memory) != VK_SUCCESS) return false;
     vkBindImageMemory(device, image, memory, 0);
@@ -414,11 +449,37 @@ bool VulkanWarper::init(int gpu_id, int width, int height, int flow_w, int flow_
     uploadSize = (VkDeviceSize)frame_bytes * 2 + (VkDeviceSize)flow_w * flow_h * 4 * sizeof(float);
     downloadSize = (VkDeviceSize)frame_bytes;
 
-    VkMemoryPropertyFlags hostProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    if (!createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, hostProps, stagingUpload, stagingUploadMem)) return false;
+    VkMemoryPropertyFlags hostUploadProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    if (!createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, hostUploadProps, stagingUpload, stagingUploadMem)) return false;
     if (vkMapMemory(device, stagingUploadMem, 0, uploadSize, 0, &stagingUploadMapped) != VK_SUCCESS) return false;
 
-    if (!createBuffer(downloadSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT, hostProps, stagingDownload, stagingDownloadMem)) return false;
+    // For download buffer: try HOST_CACHED first, then fallback to HOST_COHERENT
+    VkBufferCreateInfo dlBufferInfo{};
+    dlBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    dlBufferInfo.size = downloadSize;
+    dlBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    dlBufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device, &dlBufferInfo, nullptr, &stagingDownload) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements dlMemReq;
+    vkGetBufferMemoryRequirements(device, stagingDownload, &dlMemReq);
+
+    uint32_t dlMemType = findMemoryType(dlMemReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+    if (dlMemType != UINT32_MAX) {
+        downloadIsCached = true;
+    } else {
+        dlMemType = findMemoryType(dlMemReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        downloadIsCached = false;
+    }
+    if (dlMemType == UINT32_MAX) return false;
+
+    VkMemoryAllocateInfo dlAllocInfo{};
+    dlAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    dlAllocInfo.allocationSize = dlMemReq.size;
+    dlAllocInfo.memoryTypeIndex = dlMemType;
+    if (vkAllocateMemory(device, &dlAllocInfo, nullptr, &stagingDownloadMem) != VK_SUCCESS) return false;
+    vkBindBufferMemory(device, stagingDownload, stagingDownloadMem, 0);
+
     if (vkMapMemory(device, stagingDownloadMem, 0, downloadSize, 0, &stagingDownloadMapped) != VK_SUCCESS) return false;
 
     return true;
@@ -480,7 +541,7 @@ bool VulkanWarper::warp_frame_yuv420(
         }
     }
 
-    // 4. Record Single Command Buffer
+    // 4. Record Commands
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -604,11 +665,22 @@ bool VulkanWarper::warp_frame_yuv420(
 
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
 
+    // Invalidate cached memory before CPU read if using HOST_CACHED
+    if (downloadIsCached) {
+        VkMappedMemoryRange invalidateRange{};
+        invalidateRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        invalidateRange.memory = stagingDownloadMem;
+        invalidateRange.offset = 0;
+        invalidateRange.size = downloadSize;
+        vkInvalidateMappedMemoryRanges(device, 1, &invalidateRange);
+    }
+
     const uint8_t* dl = static_cast<const uint8_t*>(stagingDownloadMapped);
 
-    copyPlane(y.dst, dl, y.w, y.h, y.d_stride);
-    copyPlane(u.dst, dl + y_bytes, u.w, u.h, u.d_stride);
-    copyPlane(v.dst, dl + y_bytes + uv_bytes, v.w, v.h, v.d_stride);
+    // Ultra-fast streaming load copy from GPU memory
+    fast_copy_from_gpu(y.dst, dl, y.w, y.h, y.d_stride);
+    fast_copy_from_gpu(u.dst, dl + y_bytes, u.w, u.h, u.d_stride);
+    fast_copy_from_gpu(v.dst, dl + y_bytes + uv_bytes, v.w, v.h, v.d_stride);
 
     return true;
 }

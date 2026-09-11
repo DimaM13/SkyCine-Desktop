@@ -97,6 +97,7 @@ private:
     VkBuffer stagingDownload = VK_NULL_HANDLE;
     VkDeviceMemory stagingDownloadMem = VK_NULL_HANDLE;
     void* stagingDownloadMapped = nullptr;
+    bool downloadIsCached = false;
 
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
     bool createImage(uint32_t w, uint32_t h, VkFormat format, VkImageUsageFlags usage, VkImage& image, VkDeviceMemory& memory);
