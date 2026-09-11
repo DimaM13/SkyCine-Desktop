@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+export type RifeMode =
+  | 'off'
+  | 'auto_2x' | 'auto_3x'
+  | 'lite_2x' | 'lite_3x'
+  | 'balanced_2x' | 'balanced_3x'
+  | 'high_2x' | 'high_3x'
+  | 'ultra_2x' | 'ultra_3x';
+
 export interface DesktopPlayerApi {
   isDesktop: boolean;
   loadFile: (url: string, startPos?: number, title?: string) => Promise<void>;
@@ -12,8 +20,8 @@ export interface DesktopPlayerApi {
   setAudioTrack: (id: number) => Promise<void>;
   setSubtitleTrack: (id: number | 'no') => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
-  setRifeMode: (mode: 'off' | 'auto' | 'auto72' | 'lite' | 'lite72') => Promise<void>;
-  getRifeMode: () => Promise<'off' | 'auto' | 'auto72' | 'lite' | 'lite72'>;
+  setRifeMode: (mode: RifeMode) => Promise<void>;
+  getRifeMode: () => Promise<RifeMode>;
   showOsdText: (text: string, durationMs?: number) => Promise<void>;
   closePlayer: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;

@@ -65,7 +65,7 @@ fps_num, fps_den = to_fraction(fps)
 clip = core.std.AssumeFPS(clip, fpsnum=fps_num, fpsden=fps_den)
 
 # 2. Factor and bypass logic
-is_3x = (mode in ["auto72", "lite72"])
+is_3x = ("3x" in mode)
 factor = 3 if is_3x else 2
 
 if is_3x and fps >= 40.0:
@@ -90,46 +90,39 @@ else:
         base_h = h
         base_clip = clip
 
-    # 4. Determine optical flow resolution based on mode and GPU benchmark
-    if mode in ["lite", "lite72"]:
-        # Eco mode: fixed 360p flow for minimal GPU load, silence and cool thermals
-        scale_factor = 0.333
-    else:
-        if is_3x:
-            # 3x (72 FPS): RIFE generates 2 frames per 3 display frames (budget <= 15.0 ms)
-            frame_budget_ms = 15.0
-            default_scale = 0.444  # 480p fallback
-        else:
-            # 2x (48 FPS): RIFE generates 1 frame per 2 display frames (budget <= 22.0 ms)
-            frame_budget_ms = 22.0
-            default_scale = 0.500  # 540p fallback
+    # 4. Determine optical flow resolution
+    res_map = {
+        "lite_2x": 360,
+        "lite_3x": 360,
+        "balanced_2x": 540,
+        "balanced_3x": 540,
+        "high_2x": 720,
+        "high_3x": 720,
+        "ultra_2x": 1080,
+        "ultra_3x": 1080
+    }
 
-        ladder = [
-            (1080, 1.0),
-            (720, 0.667),
-            (540, 0.500),
-            (480, 0.444),
-            (360, 0.333)
-        ]
-        scale_factor = None
-        try:
-            app_data = os.environ.get("APPDATA", "")
-            bench_file = os.path.join(app_data, "vapoursynth", "rife_benchmark.json")
-            if os.path.isfile(bench_file):
-                with open(bench_file, "r", encoding="utf-8") as f:
-                    bench_data = json.load(f)
-                timings = bench_data.get("timings", {})
-                for res_h, s in ladder:
-                    if (not is_4k) or res_h <= 720:
-                        raw_t = timings.get(str(res_h))
-                        if raw_t is not None and float(raw_t) <= frame_budget_ms:
-                            scale_factor = s
-                            break
-        except Exception:
-            scale_factor = None
 
-        if scale_factor is None:
-            scale_factor = default_scale
+    # If dynamic auto or explicit resolution is provided in current_playback.json:
+    target_res = None
+    try:
+        if sdata.get("target_res"):
+            target_res = int(sdata["target_res"])
+    except Exception:
+        pass
+
+    if not target_res:
+        target_res = res_map.get(mode, 540 if factor == 2 else 480)
+
+    # Resolution cap: Optical flow resolution must NEVER exceed the actual video height (never upscale!)
+    target_res = min(target_res, base_h)
+
+    # In 4K mode, maximum flow resolution is capped to 720p for stability
+    if is_4k and target_res > 720:
+        target_res = 720
+
+    # Dynamic scale factor proportional to the video's actual resolution
+    scale_factor = min(1.0, float(target_res) / float(base_h))
 
     # 5. Compute target width & height strictly aligned to multiples of 32!
     # Tensor cores require dimensions to be divisible by 32 for maximum hardware throughput.

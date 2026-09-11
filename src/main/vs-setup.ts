@@ -136,8 +136,7 @@ export function ensureVapourSynthConfig(binDir: string): boolean {
     }
 
     fs.writeFileSync(vsConfigFile, lines.join('\n') + '\n', 'utf-8');
-    console.log('[VapourSynth Setup] ✅ Configured vapoursynth.toml successfully with keys:', keys);
-    runGpuBenchmarkIfNeeded(binDir);
+    // Offline benchmark removed in favor of real-time dynamic drop-detection in MPV controller
     return true;
   } catch (err) {
     console.error('[VapourSynth Setup] Failed to configure vapoursynth.toml:', err);
@@ -145,40 +144,6 @@ export function ensureVapourSynthConfig(binDir: string): boolean {
   }
 }
 
-export function runGpuBenchmarkIfNeeded(binDir: string): void {
-  if (process.platform !== 'win32') return;
-
-  const appData = process.env.APPDATA;
-  if (!appData) return;
-
-  const benchFile = path.join(appData, 'vapoursynth', 'rife_benchmark.json');
-  if (fs.existsSync(benchFile)) {
-    try {
-      const content = fs.readFileSync(benchFile, 'utf-8');
-      const data = JSON.parse(content);
-      if (data && data.timings && Object.keys(data.timings).length > 0) {
-        console.log('[RIFE Benchmark] ⚡ Existing GPU benchmark found:', data.gpu);
-        return;
-      }
-    } catch {}
-  }
-
-  const pyInfo = findPythonInfo(binDir);
-  if (!pyInfo) return;
-
-  const benchScript = path.join(binDir, 'vapoursynth', 'benchmark_gpu.py');
-  if (!fs.existsSync(benchScript)) return;
-
-  console.log('[RIFE Benchmark] 🚀 Spawning background GPU benchmark (silent)...');
-  try {
-    const { spawn } = require('child_process');
-    const child = spawn(pyInfo.pythonExe, [benchScript], {
-      windowsHide: true,
-      stdio: ['ignore', 'ignore', 'ignore'],
-      detached: true
-    });
-    child.unref();
-  } catch (e) {
-    console.warn('[RIFE Benchmark] Could not spawn background benchmark:', e);
-  }
+export function runGpuBenchmarkIfNeeded(_binDir: string): void {
+  // Deprecated: real-time drop-detection in MpvController dynamically handles resolution adaptation.
 }

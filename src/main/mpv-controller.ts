@@ -29,7 +29,13 @@ function findMpvPath(): string {
   return path.join(process.resourcesPath, 'bin', 'mpv.exe');
 }
 
-export type RifeMode = 'off' | 'auto' | 'auto72' | 'lite' | 'lite72';
+export type RifeMode =
+  | 'off'
+  | 'auto_2x' | 'auto_3x'
+  | 'lite_2x' | 'lite_3x'
+  | 'balanced_2x' | 'balanced_3x'
+  | 'high_2x' | 'high_3x'
+  | 'ultra_2x' | 'ultra_3x';
 
 export class MpvController extends EventEmitter {
   private proc: ChildProcess | null = null;
@@ -42,6 +48,18 @@ export class MpvController extends EventEmitter {
   private currentFile: string = '';
   private isStarting = false;
   private currentRifeMode: RifeMode = 'off';
+
+  // Dynamic real-time drop detection state (zero permanent disk cache)
+  private isPaused: boolean = false;
+  private autoMonitoringTimer: NodeJS.Timeout | null = null;
+  private autoCurrentResIndex: number = 0;
+  private autoIsLocked: boolean = false;
+  private autoGraceUntil: number = 0;
+  private autoStableSince: number = 0;
+  private autoBaselineDrops: number = 0;
+  private isApplyingRife: boolean = false;
+  private readonly AUTO_RES_LADDER: number[] = [720, 540, 480, 360];
+  private activeLadder: number[] = [720, 540, 480, 360];
 
   constructor() {
     super();
@@ -71,6 +89,9 @@ export class MpvController extends EventEmitter {
       console.log(`[MPV Controller] 🔄 Loading into existing MPV process: ${urlOrPath}`);
       this.currentFile = urlOrPath;
       this.currentRifeMode = 'off';
+      this.stopAutoDropMonitor();
+      this.autoIsLocked = false;
+      this.autoCurrentResIndex = 0;
       try {
         await this.sendCommand(['set_property', 'vf', '']);
       } catch {}
@@ -84,6 +105,9 @@ export class MpvController extends EventEmitter {
     this.isStarting = true;
     this.currentFile = urlOrPath;
     this.currentRifeMode = 'off';
+    this.stopAutoDropMonitor();
+    this.autoIsLocked = false;
+    this.autoCurrentResIndex = 0;
     this.destroy();
 
     this.pipePath = `\\\\.\\pipe\\skycine_mpv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -200,9 +224,15 @@ export class MpvController extends EventEmitter {
     }
 
     if (this.currentRifeMode !== 'off') {
-      this.applyRifeMode(this.currentRifeMode).catch((e) => {
-        console.error('[MPV Controller] Error applying initial RIFE mode:', e);
-      });
+      if (this.currentRifeMode === 'auto_2x' || this.currentRifeMode === 'auto_3x') {
+        this.startAutoDropMonitor(this.currentRifeMode).catch((e) => {
+          console.error('[MPV Controller] Error starting auto drop monitor:', e);
+        });
+      } else {
+        this.applyRifeMode(this.currentRifeMode).catch((e) => {
+          console.error('[MPV Controller] Error applying initial RIFE mode:', e);
+        });
+      }
     }
   }
 
@@ -255,6 +285,7 @@ export class MpvController extends EventEmitter {
           break;
         case 'pause':
           if (typeof msg.data === 'boolean') {
+            this.isPaused = msg.data;
             this.emit('play-state', !msg.data);
           }
           break;
@@ -280,6 +311,10 @@ export class MpvController extends EventEmitter {
           break;
       }
     } else if (msg.event === 'playback-restart') {
+      if (!this.autoIsLocked && (this.currentRifeMode === 'auto_2x' || this.currentRifeMode === 'auto_3x')) {
+        this.autoGraceUntil = Date.now() + 4000;
+        this.autoStableSince = 0;
+      }
       this.emit('video-ready');
     } else if (msg.event === 'end-file') {
       this.emit('ended');
@@ -322,6 +357,10 @@ export class MpvController extends EventEmitter {
   }
 
   public async seek(targetTime: number): Promise<void> {
+    if (!this.autoIsLocked && (this.currentRifeMode === 'auto_2x' || this.currentRifeMode === 'auto_3x')) {
+      this.autoGraceUntil = Date.now() + 4000;
+      this.autoStableSince = 0;
+    }
     await this.sendCommand(['seek', targetTime, 'absolute']);
   }
 
@@ -351,10 +390,124 @@ export class MpvController extends EventEmitter {
 
   public async setRifeMode(mode: RifeMode): Promise<void> {
     this.currentRifeMode = mode;
-    await this.applyRifeMode(mode);
+    this.stopAutoDropMonitor();
+    this.autoIsLocked = false;
+    this.autoCurrentResIndex = 0;
+
+    if (mode === 'off') {
+      console.log('[MPV Controller] 🚫 Disabling RIFE AI frame generation');
+      await this.sendCommand(['set_property', 'vf', '']);
+    } else if (mode === 'auto_2x' || mode === 'auto_3x') {
+      await this.startAutoDropMonitor(mode);
+    } else {
+      await this.applyRifeMode(mode);
+    }
   }
 
-  private async applyRifeMode(mode: RifeMode): Promise<void> {
+  private stopAutoDropMonitor(): void {
+    if (this.autoMonitoringTimer) {
+      clearInterval(this.autoMonitoringTimer);
+      this.autoMonitoringTimer = null;
+    }
+  }
+
+  private async startAutoDropMonitor(mode: 'auto_2x' | 'auto_3x'): Promise<void> {
+    this.stopAutoDropMonitor();
+    this.autoIsLocked = false;
+    this.autoCurrentResIndex = 0;
+
+    let videoHeight = 1080;
+    try {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const vparams = await this.sendCommand(['get_property', 'video-params']);
+        if (vparams && vparams.data && vparams.data.h) {
+          videoHeight = vparams.data.h;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    } catch {}
+
+    // Never test or run optical flow above the actual video height (never upscale low-res video)
+    const candidateLadder = this.AUTO_RES_LADDER.filter((r) => r <= videoHeight);
+    this.activeLadder = candidateLadder.length > 0 ? candidateLadder : [this.AUTO_RES_LADDER[this.AUTO_RES_LADDER.length - 1]];
+
+    const startRes = this.activeLadder[0];
+    console.log(`[MPV Controller] 🔄 Starting dynamic auto drop monitor for ${mode} at ${startRes}p (videoHeight=${videoHeight}, ladder=${this.activeLadder.join('->')})`);
+
+    this.isApplyingRife = true;
+    await this.applyRifeMode(mode, startRes);
+    this.isApplyingRife = false;
+
+    // Grace period: first 4 seconds for video pipeline stabilization / buffer filling
+    this.autoGraceUntil = Date.now() + 4000;
+    this.autoStableSince = 0;
+    this.autoBaselineDrops = 0;
+
+    try {
+      const dropRes = await this.sendCommand(['get_property', 'frame-drop-count']);
+      if (dropRes && typeof dropRes.data === 'number') {
+        this.autoBaselineDrops = dropRes.data;
+      }
+    } catch {}
+
+    this.autoMonitoringTimer = setInterval(async () => {
+      if (this.autoIsLocked || this.isPaused || !this.isConnected || this.isApplyingRife) {
+        return;
+      }
+
+      try {
+        const dropRes = await this.sendCommand(['get_property', 'frame-drop-count']);
+        const currentDrops = (dropRes && typeof dropRes.data === 'number') ? dropRes.data : 0;
+        const now = Date.now();
+
+        if (now < this.autoGraceUntil) {
+          // Stabilization period: ignore initial drops while buffer/filter spins up
+          this.autoBaselineDrops = currentDrops;
+          this.autoStableSince = now;
+          return;
+        }
+
+        const deltaDrops = currentDrops - this.autoBaselineDrops;
+
+        if (deltaDrops > 2) {
+          // Drops detected after grace period: downscale to next ladder step
+          if (this.autoCurrentResIndex < this.activeLadder.length - 1) {
+            this.autoCurrentResIndex++;
+            const nextRes = this.activeLadder[this.autoCurrentResIndex];
+            console.log(`[MPV Controller] ⚠️ Frame drops detected (+${deltaDrops} drops). Downscaling RIFE to ${nextRes}p`);
+
+            this.isApplyingRife = true;
+            await this.applyRifeMode(mode, nextRes);
+            this.isApplyingRife = false;
+
+            // Reset baseline drops and grant 4 seconds grace period for the new resolution
+            const postDropRes = await this.sendCommand(['get_property', 'frame-drop-count']);
+            this.autoBaselineDrops = (postDropRes && typeof postDropRes.data === 'number') ? postDropRes.data : currentDrops;
+            this.autoGraceUntil = Date.now() + 4000;
+            this.autoStableSince = 0;
+          } else {
+            console.log(`[MPV Controller] 🔒 Reached minimum resolution (${this.activeLadder[this.autoCurrentResIndex]}p), locking.`);
+            this.autoIsLocked = true;
+            this.stopAutoDropMonitor();
+          }
+        } else {
+          // Playback is smooth without drops
+          if (!this.autoStableSince) {
+            this.autoStableSince = now;
+          } else if (now - this.autoStableSince >= 4000) {
+            console.log(`[MPV Controller] ✅ RIFE resolution ${this.activeLadder[this.autoCurrentResIndex]}p is rock-solid stable! Locked for this playback session.`);
+            this.autoIsLocked = true;
+            this.stopAutoDropMonitor();
+          }
+        }
+      } catch (err) {
+        // Ignore transient IPC read errors
+      }
+    }, 1000);
+  }
+
+  private async applyRifeMode(mode: RifeMode, explicitRes?: number): Promise<void> {
     const mpvBinPath = findMpvPath();
     const binDir = path.dirname(mpvBinPath);
     const vsDir = path.join(binDir, 'vapoursynth');
@@ -362,82 +515,82 @@ export class MpvController extends EventEmitter {
     if (mode === 'off') {
       console.log('[MPV Controller] 🚫 Disabling RIFE AI frame generation');
       await this.sendCommand(['set_property', 'vf', '']);
-    } else {
-      const scriptName = 'rife_auto.vpy';
-      const scriptPath = path.join(vsDir, scriptName).replace(/\\/g, '/');
-      console.log(`[MPV Controller] 🚀 Enabling RIFE AI mode=${mode}: ${scriptPath}`);
-
-      let is4K = false;
-      let detectedFps = 0;
-      try {
-        for (let attempt = 0; attempt < 8; attempt++) {
-          const res = await this.sendCommand(['get_property', 'video-params']);
-          if (res && res.data && (res.data.w || res.data.h)) {
-            const w = res.data.w || 0;
-            const h = res.data.h || 0;
-            if (w > 1920 || h > 1080) {
-              is4K = true;
-            }
-          }
-
-          const fpsRes = await this.sendCommand(['get_property', 'container-fps']);
-          if (fpsRes && typeof fpsRes.data === 'number' && fpsRes.data > 0) {
-            detectedFps = fpsRes.data;
-          } else {
-            const vfFpsRes = await this.sendCommand(['get_property', 'estimated-vf-fps']);
-            if (vfFpsRes && typeof vfFpsRes.data === 'number' && vfFpsRes.data > 0) {
-              detectedFps = vfFpsRes.data;
-            }
-          }
-
-          if (detectedFps > 0) {
-            break;
-          }
-          await new Promise((r) => setTimeout(r, 100));
-        }
-      } catch (e) {
-        console.warn('[MPV Controller] Could not fetch video properties:', e);
-      }
-
-      // Save current playback state for VapourSynth script
-      try {
-        const appData = process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME || '', 'Library', 'Preferences') : '/var/local');
-        const vsConfigDir = path.join(appData, 'vapoursynth');
-        if (!fs.existsSync(vsConfigDir)) {
-          fs.mkdirSync(vsConfigDir, { recursive: true });
-        }
-        const stateFile = path.join(vsConfigDir, 'current_playback.json');
-        fs.writeFileSync(stateFile, JSON.stringify({
-          fps: detectedFps || 24,
-          is4K,
-          mode,
-          timestamp: Date.now()
-        }), 'utf-8');
-        console.log(`[MPV Controller] 💾 Saved current playback state: mode=${mode}, fps=${detectedFps}, is4K=${is4K}`);
-      } catch (err) {
-        console.warn('[MPV Controller] Could not write current_playback.json:', err);
-      }
-
-      // 4K UHD optimization: downscale 4K base to 720p (w=1280) before RIFE.
-      // This reduces total pipeline latency from ~24ms to ~16ms (<20.8ms budget),
-      // giving rock-solid 48/60 FPS with 0 dropped frames. Direct3D11 scales it to display.
-      // For 1080p and lower, maintain native base resolution (min(1920,iw)).
-      const scaleFilter = is4K
-        ? 'scale=w=1280:h=-2:flags=fast_bilinear'
-        : 'scale=w="min(1920,iw)":h=-2:flags=fast_bilinear';
-
-      console.log(`[MPV Controller] 🎯 RIFE video scale configured: is4K=${is4K}, fps=${detectedFps}, filter=${scaleFilter}`);
-
-      const vfChain = [
-        scaleFilter,
-        'format=yuv420p',
-        `vapoursynth="${scriptPath}":concurrent-frames=2`
-      ].join(',');
-      await this.sendCommand(['set_property', 'vf', vfChain]);
+      return;
     }
+
+    const scriptName = 'rife_auto.vpy';
+    const scriptPath = path.join(vsDir, scriptName).replace(/\\/g, '/');
+    console.log(`[MPV Controller] 🚀 Enabling RIFE AI mode=${mode}${explicitRes ? ` (target_res=${explicitRes}p)` : ''}: ${scriptPath}`);
+
+    let is4K = false;
+    let detectedFps = 0;
+    try {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const res = await this.sendCommand(['get_property', 'video-params']);
+        if (res && res.data && (res.data.w || res.data.h)) {
+          const w = res.data.w || 0;
+          const h = res.data.h || 0;
+          if (w > 1920 || h > 1080) {
+            is4K = true;
+          }
+        }
+
+        const fpsRes = await this.sendCommand(['get_property', 'container-fps']);
+        if (fpsRes && typeof fpsRes.data === 'number' && fpsRes.data > 0) {
+          detectedFps = fpsRes.data;
+        } else {
+          const vfFpsRes = await this.sendCommand(['get_property', 'estimated-vf-fps']);
+          if (vfFpsRes && typeof vfFpsRes.data === 'number' && vfFpsRes.data > 0) {
+            detectedFps = vfFpsRes.data;
+          }
+        }
+
+        if (detectedFps > 0) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    } catch (e) {
+      console.warn('[MPV Controller] Could not fetch video properties:', e);
+    }
+
+    // Save current playback state for VapourSynth script (target_res is dynamic in-memory)
+    try {
+      const appData = process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME || '', 'Library', 'Preferences') : '/var/local');
+      const vsConfigDir = path.join(appData, 'vapoursynth');
+      if (!fs.existsSync(vsConfigDir)) {
+        fs.mkdirSync(vsConfigDir, { recursive: true });
+      }
+      const stateFile = path.join(vsConfigDir, 'current_playback.json');
+      fs.writeFileSync(stateFile, JSON.stringify({
+        fps: detectedFps || 24,
+        is4K,
+        mode,
+        target_res: explicitRes || null,
+        timestamp: Date.now()
+      }), 'utf-8');
+      console.log(`[MPV Controller] 💾 Saved current playback state: mode=${mode}, fps=${detectedFps}, is4K=${is4K}, target_res=${explicitRes || 'default'}`);
+    } catch (err) {
+      console.warn('[MPV Controller] Could not write current_playback.json:', err);
+    }
+
+    const scaleFilter = is4K
+      ? 'scale=w=1280:h=-2:flags=fast_bilinear'
+      : 'scale=w="min(1920,iw)":h=-2:flags=fast_bilinear';
+
+    console.log(`[MPV Controller] 🎯 RIFE video scale configured: is4K=${is4K}, fps=${detectedFps}, filter=${scaleFilter}`);
+
+    const vfChain = [
+      scaleFilter,
+      'format=yuv420p',
+      `vapoursynth="${scriptPath}":concurrent-frames=2`
+    ].join(',');
+    await this.sendCommand(['set_property', 'vf', vfChain]);
   }
 
   public destroy(): void {
+    this.stopAutoDropMonitor();
+    this.autoIsLocked = false;
     this.sendQueue = [];
     this.pendingRequests.clear();
     try {
