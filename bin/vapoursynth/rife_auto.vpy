@@ -36,17 +36,23 @@ def ensure_flow_mask_model(base_dir):
         return src_dir
 
 core.std.LoadPlugin(plugin_path)
-has_fastwarp = False
-if os.path.isfile(fastwarp_path):
-    try:
-        core.std.LoadPlugin(fastwarp_path)
-        has_fastwarp = hasattr(core, "fastwarp")
-    except Exception:
-        has_fastwarp = False
+
+if not os.path.isfile(fastwarp_path):
+    raise RuntimeError(f"[FastWarp] Required librife_fastwarp.dll not found at: {fastwarp_path}")
+
+try:
+    core.std.LoadPlugin(fastwarp_path)
+except Exception as e:
+    raise RuntimeError(f"[FastWarp] Failed to load librife_fastwarp.dll: {e}")
+
+if not hasattr(core, "fastwarp"):
+    raise RuntimeError("[FastWarp] core.fastwarp plugin namespace not found!")
 
 flow_model_path = ensure_flow_mask_model(base_dir)
-use_warp = has_fastwarp and os.path.isdir(flow_model_path)
-model_path = flow_model_path if use_warp else standard_model_path
+if not (os.path.isdir(flow_model_path) and os.path.isfile(os.path.join(flow_model_path, "flownet.param"))):
+    raise RuntimeError(f"[FastWarp] Flow & Mask model not found at: {flow_model_path}")
+
+model_path = flow_model_path
 
 clip = video_in
 
@@ -187,30 +193,18 @@ else:
         gpu_thread=2
     )
 
-    # 9. Hardware-accelerated Warp or Bicubic synthesis & interleaving
-    if use_warp:
-        clip0 = base_clip[:-1]
-        clip1 = base_clip[1:]
-        if factor == 3:
-            flow1 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=1)
-            flow2 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=2)
-            gen1_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow1)
-            gen2_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow2)
-            out = core.std.Interleave([clip0, gen1_native, gen2_native]) + base_clip[-1]
-        else:
-            odd_flow = core.std.SelectEvery(interpolated_rgb, cycle=2, offsets=1)
-            gen_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=odd_flow)
-            out = core.std.Interleave([clip0, gen_native]) + base_clip[-1]
+    # 9. Hardware-accelerated Native FastWarp 1080p synthesis & interleaving
+    clip0 = base_clip[:-1]
+    clip1 = base_clip[1:]
+    if factor == 3:
+        flow1 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=1)
+        flow2 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=2)
+        gen1_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow1)
+        gen2_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=flow2)
+        out = core.std.Interleave([clip0, gen1_native, gen2_native]) + base_clip[-1]
     else:
-        if factor == 3:
-            gen1 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=1)
-            gen2 = core.std.SelectEvery(interpolated_rgb, cycle=3, offsets=2)
-            gen1_native = core.resize.Bicubic(gen1, width=base_w, height=base_h, format=base_clip.format, matrix_s="709")
-            gen2_native = core.resize.Bicubic(gen2, width=base_w, height=base_h, format=base_clip.format, matrix_s="709")
-            out = core.std.Interleave([base_clip, gen1_native, gen2_native])
-        else:
-            gen_odd = core.std.SelectEvery(interpolated_rgb, cycle=2, offsets=1)
-            gen_native = core.resize.Bicubic(gen_odd, width=base_w, height=base_h, format=base_clip.format, matrix_s="709")
-            out = core.std.Interleave([base_clip, gen_native])
+        odd_flow = core.std.SelectEvery(interpolated_rgb, cycle=2, offsets=1)
+        gen_native = core.fastwarp.Warp(clip0=clip0, clip1=clip1, flow=odd_flow)
+        out = core.std.Interleave([clip0, gen_native]) + base_clip[-1]
 
     out.set_output()
