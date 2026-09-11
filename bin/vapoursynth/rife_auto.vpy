@@ -118,12 +118,18 @@ else:
     h = clip.height
 
     # 3. 4K / UHD optimization fallback:
-    # If video resolution exceeds 1080p, downscale to a 720p base while strictly preserving
+    # If video resolution exceeds 1080p, safely downscale to a 1080p base while strictly preserving
     # the exact aspect ratio and aligning to multiples of 32 for optimal GPU tensor alignment.
     is_4k = (w > 1920 or h > 1080 or is_4k_hint)
-    base_w = w
-    base_h = h
-    base_clip = clip
+    if w > 1920 or h > 1080:
+        scale_4k = min(1920.0 / w, 1080.0 / h)
+        base_w = (int(round(w * scale_4k)) // 2) * 2
+        base_h = (int(round(h * scale_4k)) // 2) * 2
+        base_clip = core.resize.Bilinear(clip, width=base_w, height=base_h, format=vs.YUV420P8)
+    else:
+        base_w = w
+        base_h = h
+        base_clip = clip
 
     # 4. Determine optical flow resolution
     res_map = {
@@ -149,9 +155,9 @@ else:
     # Resolution cap: Optical flow resolution must NEVER exceed the actual video height (never upscale!)
     target_res = min(target_res, base_h)
 
-    # In 4K mode, maximum flow resolution is capped to 720p for stability
-    if is_4k and target_res > 720:
-        target_res = 720
+    # In 4K mode, maximum flow resolution is capped to 540p for stability
+    if is_4k and target_res > 540:
+        target_res = 540
 
     # Dynamic scale factor proportional to the video's actual resolution
     scale_factor = min(1.0, float(target_res) / float(base_h))
