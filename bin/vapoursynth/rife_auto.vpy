@@ -92,18 +92,15 @@ else:
 
     # 4. Determine optical flow resolution
     res_map = {
-        "lite_2x": 360,
-        "lite_3x": 360,
-        "balanced_2x": 540,
-        "balanced_3x": 540,
-        "high_2x": 720,
-        "high_3x": 720,
-        "ultra_2x": 1080,
-        "ultra_3x": 1080
+        "lite_2x": 240,
+        "lite_3x": 240,
+        "balanced_2x": 360,
+        "balanced_3x": 360,
+        "high_2x": 540,
+        "high_3x": 540
     }
 
-
-    # If dynamic auto or explicit resolution is provided in current_playback.json:
+    # If dynamic explicit resolution is provided in current_playback.json:
     target_res = None
     try:
         if sdata.get("target_res"):
@@ -112,7 +109,7 @@ else:
         pass
 
     if not target_res:
-        target_res = res_map.get(mode, 540 if factor == 2 else 480)
+        target_res = res_map.get(mode, 360)
 
     # Resolution cap: Optical flow resolution must NEVER exceed the actual video height (never upscale!)
     target_res = min(target_res, base_h)

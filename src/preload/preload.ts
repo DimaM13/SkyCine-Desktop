@@ -2,19 +2,14 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 export type RifeMode =
   | 'off'
-  | 'auto_2x' | 'auto_3x'
   | 'lite_2x' | 'lite_3x'
   | 'balanced_2x' | 'balanced_3x'
-  | 'high_2x' | 'high_3x'
-  | 'ultra_2x' | 'ultra_3x';
+  | 'high_2x' | 'high_3x';
 
 export interface RifeStatus {
   mode: RifeMode;
   baseFps: number;
   targetFps: number;
-  targetRes?: number;
-  isLocked: boolean;
-  tuning: boolean;
 }
 
 export interface DesktopPlayerApi {
