@@ -10,7 +10,7 @@ struct FastWarpData {
     VSNode* node0;
     VSNode* node1;
     VSNode* nodeFlow;
-    VSVideoInfo vi;
+    const VSVideoInfo* vi;
 };
 
 static inline void warp_plane_uint8(
@@ -212,7 +212,7 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
 
         if (!src0 || !src1 || !flow) return nullptr;
 
-        VSFrame* dst = vsapi->newVideoFrame(&d->vi.format, d->vi.width, d->vi.height, src0, core);
+        VSFrame* dst = vsapi->newVideoFrame(&d->vi->format, d->vi->width, d->vi->height, src0, core);
 
         int flow_w = vsapi->getFrameWidth(flow, 0);
         int flow_h = vsapi->getFrameHeight(flow, 0);
@@ -223,7 +223,7 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
         const VSVideoFormat* flow_fmt = vsapi->getVideoFrameFormat(flow);
         const float* flow_p2 = (flow_fmt->numPlanes > 2) ? reinterpret_cast<const float*>(vsapi->getReadPtr(flow, 2)) : nullptr;
 
-        for (int p = 0; p < d->vi.format.numPlanes; p++) {
+        for (int p = 0; p < d->vi->format.numPlanes; p++) {
             int pw = vsapi->getFrameWidth(src0, p);
             int ph = vsapi->getFrameHeight(src0, p);
             ptrdiff_t s_stride = vsapi->getStride(src0, p);
@@ -233,14 +233,14 @@ static const VSFrame* VS_CC fastwarpGetFrame(int n, int activationReason, void* 
             const uint8_t* s1 = vsapi->getReadPtr(src1, p);
             uint8_t* d_ptr = vsapi->getWritePtr(dst, p);
 
-            if (d->vi.format.sampleType == stInteger && d->vi.format.bytesPerSample == 1) {
+            if (d->vi->format.sampleType == stInteger && d->vi->format.bytesPerSample == 1) {
                 warp_plane_uint8(
                     s0, s1, d_ptr,
                     pw, ph, s_stride, d_stride,
                     flow_p0, flow_p1, flow_p2,
                     flow_w, flow_h, flow_stride
                 );
-            } else if (d->vi.format.sampleType == stFloat && d->vi.format.bytesPerSample == 4) {
+            } else if (d->vi->format.sampleType == stFloat && d->vi->format.bytesPerSample == 4) {
                 warp_plane_float(
                     reinterpret_cast<const float*>(s0),
                     reinterpret_cast<const float*>(s1),
@@ -308,16 +308,10 @@ static void VS_CC fastwarpCreate(const VSMap* in, VSMap* out, void* userData, VS
     d->node0 = node0;
     d->node1 = node1;
     d->nodeFlow = nodeFlow;
-    d->vi = *vi_src;
+    d->vi = vi_src;
 
-    VSFilterDependency deps[] = {
-        { d->node0, rpStrictSpatial },
-        { d->node1, rpStrictSpatial },
-        { d->nodeFlow, rpStrictSpatial }
-    };
-
-    if (logf) { fprintf(logf, "Calling createVideoFilter...\n"); fflush(logf); }
-    vsapi->createVideoFilter(out, "Warp", &d->vi, fastwarpGetFrame, fastwarpFree, fmParallel, deps, 3, d.release(), core);
+    if (logf) { fprintf(logf, "Calling createVideoFilter with vi_src and nullptr deps...\n"); fflush(logf); }
+    vsapi->createVideoFilter(out, "Warp", vi_src, fastwarpGetFrame, fastwarpFree, fmParallel, nullptr, 0, d.release(), core);
     if (logf) { fprintf(logf, "createVideoFilter returned successfully!\n"); fclose(logf); }
 }
 
