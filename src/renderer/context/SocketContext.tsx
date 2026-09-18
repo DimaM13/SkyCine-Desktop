@@ -8,7 +8,9 @@ interface SocketContextType {
   socket: Socket | null;
   isConnected: boolean;
   clockOffset: number; // Server Time - Local Time
+  rttMs: number;
   getSyncedServerTime: () => number;
+  getRtt: () => number;
   currentInvite: RoomInviteNotification | null;
   clearInvite: () => void;
   setActivity: (activity?: string, status?: string) => void;
@@ -21,8 +23,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [clockOffset, setClockOffset] = useState<number>(0);
+  const [rttMs, setRttMs] = useState<number>(0);
   const [currentInvite, setCurrentInvite] = useState<RoomInviteNotification | null>(null);
   const offsetRef = useRef<number>(0);
+  const rttRef = useRef<number>(0);
 
   useEffect(() => {
     const serverUrl = getServerUrl();
@@ -65,6 +69,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       offsetRef.current = calculatedOffset;
       setClockOffset(calculatedOffset);
+      rttRef.current = rtt;
+      setRttMs(rtt);
     });
 
     // Room Invitations
@@ -104,6 +110,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return Date.now() + offsetRef.current;
   }, []);
 
+  const getRtt = React.useCallback(() => rttRef.current, []);
+
   const clearInvite = React.useCallback(() => {
     setCurrentInvite(null);
   }, []);
@@ -120,7 +128,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         socket,
         isConnected,
         clockOffset,
+        rttMs,
         getSyncedServerTime,
+        getRtt,
         currentInvite,
         clearInvite,
         setActivity,

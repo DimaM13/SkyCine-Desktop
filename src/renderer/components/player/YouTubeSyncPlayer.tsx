@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Play, Pause, RotateCcw, RotateCw, Volume2, VolumeX,
   Maximize, Minimize, ArrowLeft, Users, Share2,
@@ -22,7 +22,7 @@ interface YouTubeSyncPlayerProps {
   reactions: RoomReaction[];
   onPlayRequest: () => void;
   onPauseRequest: () => void;
-  onSeekRequest: (pos: number) => void;
+  onSeekRequest: (pos: number, shouldPlay?: boolean) => void;
   onToggleSidebar: () => void;
   isSidebarOpen: boolean;
   onBack: () => void;
@@ -32,6 +32,7 @@ interface YouTubeSyncPlayerProps {
   onAttachPauseHandler?: (fn: () => void) => void;
   onAttachGetCurrentTime?: (fn: () => number) => void;
   onAttachGetIsPaused?: (fn: () => boolean) => void;
+  onControlsVisibilityChange?: (visible: boolean) => void;
 }
 
 export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
@@ -52,13 +53,34 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
   onAttachPauseHandler,
   onAttachGetCurrentTime,
   onAttachGetIsPaused,
+  onControlsVisibilityChange,
 }) => {
   const { socket } = useSocket();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [engine, setEngine] = useState<'iframe' | 'server_stream'>('iframe');
   const [currentYtId, setCurrentYtId] = useState<string>(room.youtubeId || '');
-  const [videoTitle] = useState<string>(room.youtubeTitle || room.title);
+  const [videoTitle, setVideoTitle] = useState<string>(room.youtubeTitle || room.title);
+
+  // Смена видео хостом: сервер рассылает room:youtube_changed всем в комнате
+  useEffect(() => {
+    if (!socket) return;
+    const onChanged = (data: { youtubeId: string; youtubeTitle?: string }) => {
+      if (!data?.youtubeId) return;
+      setCurrentYtId(data.youtubeId);
+      if (data.youtubeTitle) setVideoTitle(data.youtubeTitle);
+      setCurrentTime(0);
+      setIsPlaying(false);
+      setEngine('iframe');
+      setShowChangeModal(false);
+      setNewVideoUrl('');
+      setIsChangingVideo(false);
+    };
+    socket.on('room:youtube_changed', onChanged);
+    return () => {
+      socket.off('room:youtube_changed', onChanged);
+    };
+  }, [socket]);
 
   const [isPlaying, setIsPlaying] = useState(roomState === 'PLAYING');
   const [currentTime, setCurrentTime] = useState(room.currentPosition || 0);
@@ -75,6 +97,12 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
   const [changeError, setChangeError] = useState('');
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const onControlsVisibilityChangeRef = useRef(onControlsVisibilityChange);
+  onControlsVisibilityChangeRef.current = onControlsVisibilityChange;
+  useEffect(() => {
+    onControlsVisibilityChangeRef.current?.(showControls);
+  }, [showControls]);
 
   const resetControlsTimeout = () => {
     setShowControls(true);
@@ -98,7 +126,7 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
   const handleSeek = (seconds: number) => {
     const target = Math.max(0, Math.min(duration || 99999, seconds));
     setCurrentTime(target);
-    onSeekRequest(target);
+    onSeekRequest(target, isPlaying);
     resetControlsTimeout();
   };
 

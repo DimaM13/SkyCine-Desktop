@@ -23,7 +23,7 @@ interface CustomPlayerProps {
   reactions?: any[];
   onPlayRequest?: () => void;
   onPauseRequest?: () => void;
-  onSeekRequest?: (pos: number) => void;
+  onSeekRequest?: (pos: number, shouldPlay?: boolean) => void;
   onSyncToHost?: () => void;
   onForceSyncAll?: () => void;
   onToggleSidebar?: () => void;
@@ -31,9 +31,17 @@ interface CustomPlayerProps {
   onBack?: () => void;
   onInvite?: () => void;
   onAttachSeekHandler?: (fn: (pos: number, shouldPlay?: boolean) => void) => void;
+  onAttachPlayHandler?: (fn: () => void) => void;
+  onAttachPauseHandler?: (fn: () => void) => void;
   onAttachGetCurrentTime?: (fn: () => number) => void;
+  onAttachGetIsPaused?: (fn: () => boolean) => void;
   initialPosition?: number;
   videoRef?: React.RefObject<HTMLVideoElement>;
+  onDesktopHealth?: (patch: {
+    isBuffering?: boolean; bufferedAheadSec?: number; stallCount?: number;
+    stallMs?: number; droppedFrames?: number; hwdec?: string;
+  }) => void;
+  onControlsVisibilityChange?: (visible: boolean) => void;
 }
 
 export type RifeMode =
@@ -68,12 +76,19 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   onBack,
   onInvite,
   onAttachSeekHandler,
+  onAttachPlayHandler,
+  onAttachPauseHandler,
   onAttachGetCurrentTime,
+  onAttachGetIsPaused,
   videoRef: externalVideoRef,
+  onDesktopHealth,
+  onControlsVisibilityChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const internalVideoRef = useRef<HTMLVideoElement>(null);
   const videoRef = externalVideoRef || internalVideoRef;
+  const onDesktopHealthRef = useRef(onDesktopHealth);
+  onDesktopHealthRef.current = onDesktopHealth;
 
   // Web Audio Gain Booster
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -95,6 +110,12 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [isBuffering, setIsBuffering] = useState(false);
+  // Сообщаем наружу видимость интерфейса (топ-бар здоровья прячется вместе с ним)
+  const onControlsVisibilityChangeRef = useRef(onControlsVisibilityChange);
+  onControlsVisibilityChangeRef.current = onControlsVisibilityChange;
+  useEffect(() => {
+    onControlsVisibilityChangeRef.current?.(showControls);
+  }, [showControls]);
   const [showStatsModal, setShowStatsModal] = useState(false);
   const [justSynced, setJustSynced] = useState(false);
 
@@ -398,6 +419,17 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
       }),
       dp.onBuffering((buf: boolean) => {
         setIsBuffering(buf);
+        try { onDesktopHealthRef.current?.({ isBuffering: buf }); } catch {}
+      }),
+      dp.onStats?.((st: any) => {
+        try {
+          onDesktopHealthRef.current?.({
+            isBuffering: st?.isBuffering,
+            bufferedAheadSec: typeof st?.bufferedAheadSec === 'number' ? st.bufferedAheadSec : undefined,
+            droppedFrames: typeof st?.droppedFrames === 'number' ? st.droppedFrames : undefined,
+            hwdec: typeof st?.hwdec === 'string' ? st.hwdec : undefined,
+          });
+        } catch {}
       }),
       dp.onRifeStatus?.((st: RifeStatus) => {
         if (st) {
@@ -568,6 +600,9 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     streamInfoRef.current = { mediaId: media.id, quality: selectedQuality, audioIndex: selectedAudioTrack, isApple: isAppleDevice, isDirectPlay };
   }, [media.id, selectedQuality, selectedAudioTrack, isAppleDevice, isDirectPlay]);
 
+  // Уникальный id маунта (привязка HLS-сессии сервера 9.0+: чужой маяк чужую сессию не убивает)
+  const mountIdRef = useRef<string>(Math.random().toString(36).substring(2, 10));
+
   // Clean up Hls and terminate FFmpeg session on unmount or page exit
   useEffect(() => {
     const endSession = () => {
@@ -575,7 +610,7 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
       if (!isDirectPlay && !isWatchTogether) {
         const token = localStorage.getItem('myplex_token');
         const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-        const payload = JSON.stringify({ mediaId, quality, audioIndex, isApple });
+        const payload = JSON.stringify({ mediaId, quality, audioIndex, isApple, mount: mountIdRef.current });
 
         try {
           if (navigator.sendBeacon) {
@@ -637,7 +672,8 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
 
     const isAppleParam = isAppleDevice ? '1' : '0';
     const startParam = startPos > 0 ? `startTime=${Math.floor(startPos)}` : '';
-    const params = [`quality=${quality}`, `audioIndex=${audioIndex}`, `isApple=${isAppleParam}`, startParam, tokenParam, roomParam].filter(Boolean).join('&');
+    const mountParam = `mount=${mountIdRef.current}`;
+    const params = [`quality=${quality}`, `audioIndex=${audioIndex}`, `isApple=${isAppleParam}`, startParam, tokenParam, roomParam, mountParam].filter(Boolean).join('&');
     return `${serverUrl}/api/stream/${media.id}/master.m3u8?${params}`;
   }, [media.id, isDirectPlay, isAppleDevice, isWatchTogether, room?.id]);
 
@@ -679,12 +715,57 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
     onAttachSeekHandler?.(doSeek);
   }, [doSeek, onAttachSeekHandler]);
 
+  // MPV play/pause/getIsPaused для комнат: раньше PLAY/PAUSE вообще не доходили до MPV
+  // (doPlayRef/doPauseRef были null, а фолбэк на videoRef пуст — нет <video> в десктопе)
+  const doPlay = useCallback(() => {
+    if (isDesktop) {
+      (window as any).desktopPlayer?.play();
+      setIsPlaying(true);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    video.play().then(() => {
+      setIsPlaying(true);
+      setIsBuffering(false);
+    }).catch(() => {});
+  }, [isDesktop, videoRef]);
+
+  const doPause = useCallback(() => {
+    if (isDesktop) {
+      (window as any).desktopPlayer?.pause();
+      setIsPlaying(false);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    setIsPlaying(false);
+  }, [isDesktop, videoRef]);
+
+  useEffect(() => {
+    onAttachPlayHandler?.(doPlay);
+  }, [doPlay, onAttachPlayHandler]);
+
+  useEffect(() => {
+    onAttachPauseHandler?.(doPause);
+  }, [doPause, onAttachPauseHandler]);
+
   useEffect(() => {
     onAttachGetCurrentTime?.(() => {
       if (isDesktop) return currentTime;
       return videoRef.current?.currentTime || 0;
     });
   }, [onAttachGetCurrentTime, isDesktop, currentTime, videoRef]);
+
+  useEffect(() => {
+    onAttachGetIsPaused?.(() => {
+      if (isDesktop) return !isPlaying;
+      const video = videoRef.current;
+      if (video) return video.paused;
+      return !isPlaying;
+    });
+  }, [onAttachGetIsPaused, isDesktop, isPlaying, videoRef]);
 
   const isInitialMount = useRef(true);
   const hasLoadedDesktopRef = useRef<string | null>(null);
@@ -864,19 +945,19 @@ export const CustomPlayer: React.FC<CustomPlayerProps> = ({
   const lastSeekTimeRef = useRef<number>(0);
 
   const triggerSeek = (targetTime: number) => {
-    if (isWatchTogether) {
-      const now = Date.now();
-      if (now - lastSeekTimeRef.current < 250) return;
-      lastSeekTimeRef.current = now;
-    }
-
     const safePos = Math.max(0, Math.min(effectiveDuration, targetTime));
     setCurrentTime(safePos);
     setScrubTime(safePos);
     setIsScrubbing(false);
 
     if (isWatchTogether) {
-      onSeekRequest?.(safePos);
+      const now = Date.now();
+      if (now - lastSeekTimeRef.current < 250) return;
+      lastSeekTimeRef.current = now;
+      // Явно пробрасываем shouldPlay, чтобы инициатор и гости получили одинаковый state
+      const video = videoRef.current;
+      const shouldPlay = isDesktop ? isPlaying : video ? !video.paused : isPlaying;
+      onSeekRequest?.(safePos, shouldPlay);
     } else {
       doSeek(safePos);
     }

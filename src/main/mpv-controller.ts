@@ -55,6 +55,13 @@ export class MpvController extends EventEmitter {
   private isPaused: boolean = false;
   private rifeDetectedBaseFps: number = 24;
   private rifeApplySequence: number = 0;
+  // ── Room Health cache ──
+  private pausedForCache: boolean = false;
+  private cacheBufferingState: number = 100;
+  private demuxerCacheDuration: number = 0;
+  private demuxerCacheTime: number = 0;
+  private frameDropCount: number = 0;
+  private hwdecCurrent: string = '';
 
   constructor() {
     super();
@@ -210,6 +217,13 @@ export class MpvController extends EventEmitter {
     this.observeProperty(5, 'volume');
     this.observeProperty(6, 'mute');
     this.observeProperty(7, 'container-fps');
+    // ── Room Health telemetry ──
+    this.observeProperty(10, 'paused-for-cache');
+    this.observeProperty(11, 'cache-buffering-state');
+    this.observeProperty(12, 'demuxer-cache-duration');
+    this.observeProperty(13, 'demuxer-cache-time');
+    this.observeProperty(14, 'frame-drop-count');
+    this.observeProperty(15, 'hwdec-current');
 
     // Flush any queued commands
     while (this.sendQueue.length > 0) {
@@ -305,8 +319,45 @@ export class MpvController extends EventEmitter {
             this.emitRifeStatus();
           }
           break;
+        case 'paused-for-cache':
+          this.pausedForCache = msg.data === true;
+          this.emit('buffering', this.pausedForCache);
+          this.emitStats();
+          break;
+        case 'cache-buffering-state':
+          if (typeof msg.data === 'number') {
+            this.cacheBufferingState = msg.data;
+            this.emitStats();
+          }
+          break;
+        case 'demuxer-cache-duration':
+          if (typeof msg.data === 'number') {
+            this.demuxerCacheDuration = msg.data;
+            this.emitStats();
+          }
+          break;
+        case 'demuxer-cache-time':
+          if (typeof msg.data === 'number') {
+            this.demuxerCacheTime = msg.data;
+            this.emitStats();
+          }
+          break;
+        case 'frame-drop-count':
+          if (typeof msg.data === 'number') {
+            this.frameDropCount = msg.data;
+            this.emitStats();
+          }
+          break;
+        case 'hwdec-current':
+          if (typeof msg.data === 'string') {
+            this.hwdecCurrent = msg.data;
+            this.emitStats();
+          }
+          break;
       }
     } else if (msg.event === 'playback-restart') {
+      this.pausedForCache = false;
+      this.emit('buffering', false);
       this.emit('video-ready');
       this.sendCommand(['get_property', 'container-fps']).then((res) => {
         if (res && typeof res.data === 'number' && res.data > 0) {
@@ -399,6 +450,27 @@ export class MpvController extends EventEmitter {
 
   private emitRifeStatus(): void {
     this.emit('rife-status', this.getRifeStatus());
+  }
+
+  public getStats() {
+    return {
+      isBuffering: this.pausedForCache,
+      bufferingPercent: this.cacheBufferingState,
+      bufferedAheadSec: Math.round(this.demuxerCacheDuration * 10) / 10,
+      cacheTime: this.demuxerCacheTime,
+      droppedFrames: this.frameDropCount,
+      hwdec: this.hwdecCurrent,
+    };
+  }
+
+  private lastStatsEmit: number = 0;
+
+  private emitStats(): void {
+    // Троттлинг: observe_property может сыпать часто
+    const now = Date.now();
+    if (now - this.lastStatsEmit < 800) return;
+    this.lastStatsEmit = now;
+    this.emit('stats', this.getStats());
   }
 
   public async setRifeMode(mode: RifeMode): Promise<void> {

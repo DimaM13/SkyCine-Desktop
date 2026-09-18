@@ -115,6 +115,12 @@ async function createWindow() {
     }
   });
 
+  mpv.on('stats', (stats) => {
+    if (!mainWindow?.isDestroyed()) {
+      mainWindow?.webContents.send('mpv:stats', stats);
+    }
+  });
+
   mpv.on('tracks', (tracks) => {
     if (!mainWindow?.isDestroyed()) {
       mainWindow?.webContents.send('mpv:tracks', tracks);
@@ -185,6 +191,10 @@ async function createWindow() {
 
   ipcMain.handle('mpv:getRifeStatus', () => {
     return mpv?.getRifeStatus() || null;
+  });
+
+  ipcMain.handle('mpv:getStats', () => {
+    return mpv?.getStats() || null;
   });
 
   ipcMain.handle('mpv:close', async () => {

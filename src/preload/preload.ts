@@ -12,6 +12,15 @@ export interface RifeStatus {
   targetFps: number;
 }
 
+export interface MpvStats {
+  isBuffering: boolean;
+  bufferingPercent: number;
+  bufferedAheadSec: number;
+  cacheTime: number;
+  droppedFrames: number;
+  hwdec: string;
+}
+
 export interface DesktopPlayerApi {
   isDesktop: boolean;
   loadFile: (url: string, startPos?: number, title?: string) => Promise<void>;
@@ -27,6 +36,7 @@ export interface DesktopPlayerApi {
   setRifeMode: (mode: RifeMode) => Promise<void>;
   getRifeMode: () => Promise<RifeMode>;
   getRifeStatus: () => Promise<RifeStatus | null>;
+  getStats: () => Promise<MpvStats | null>;
   showOsdText: (text: string, durationMs?: number) => Promise<void>;
   closePlayer: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
@@ -40,6 +50,7 @@ export interface DesktopPlayerApi {
   onPlayState: (callback: (isPlaying: boolean) => void) => () => void;
   onDuration: (callback: (duration: number) => void) => () => void;
   onBuffering: (callback: (isBuffering: boolean) => void) => () => void;
+  onStats: (callback: (stats: MpvStats) => void) => () => void;
   onTracks: (callback: (tracks: any[]) => void) => () => void;
   onRifeStatus: (callback: (status: RifeStatus) => void) => () => void;
   onEnded: (callback: () => void) => () => void;
@@ -60,6 +71,7 @@ const desktopPlayer: DesktopPlayerApi = {
   setRifeMode: (mode) => ipcRenderer.invoke('mpv:setRifeMode', mode),
   getRifeMode: () => ipcRenderer.invoke('mpv:getRifeMode'),
   getRifeStatus: () => ipcRenderer.invoke('mpv:getRifeStatus'),
+  getStats: () => ipcRenderer.invoke('mpv:getStats'),
   showOsdText: (text, durationMs = 2000) => ipcRenderer.invoke('mpv:showOsd', text, durationMs),
   closePlayer: () => ipcRenderer.invoke('mpv:close'),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggleFullscreen'),
@@ -99,6 +111,11 @@ const desktopPlayer: DesktopPlayerApi = {
     const handler = (_: any, isBuffering: boolean) => callback(isBuffering);
     ipcRenderer.on('mpv:buffering', handler);
     return () => ipcRenderer.removeListener('mpv:buffering', handler);
+  },
+  onStats: (callback) => {
+    const handler = (_: any, stats: MpvStats) => callback(stats);
+    ipcRenderer.on('mpv:stats', handler);
+    return () => ipcRenderer.removeListener('mpv:stats', handler);
   },
   onTracks: (callback) => {
     const handler = (_: any, tracks: any[]) => callback(tracks);
