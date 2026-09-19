@@ -44,12 +44,13 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     newSocket.on('connect', () => {
       setIsConnected(true);
 
-      // Identify user if logged in
+      // Identify user if logged in (токен доказывает личность сокета)
       if (user) {
         newSocket.emit('user:connect', {
           userId: user.id,
           username: user.username,
           avatarUrl: user.avatarUrl,
+          token: localStorage.getItem('myplex_token') || undefined,
         });
       }
 
@@ -98,6 +99,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         userId: user.id,
         username: user.username,
         avatarUrl: user.avatarUrl,
+        token: localStorage.getItem('myplex_token') || undefined,
       });
     }
   }, [user, socket]);
